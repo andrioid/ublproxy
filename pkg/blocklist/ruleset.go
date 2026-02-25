@@ -147,7 +147,15 @@ func extractHostnameRule(pattern string) (string, bool) {
 
 // ShouldBlock returns true if the URL matches any blocking rule and no
 // exception rule overrides it. Safe to call on a nil receiver (returns false).
+// Does not evaluate context-dependent options ($third-party, $domain).
 func (rs *RuleSet) ShouldBlock(rawURL string) bool {
+	return rs.ShouldBlockRequest(rawURL, MatchContext{})
+}
+
+// ShouldBlockRequest returns true if the URL matches any blocking rule
+// (considering context-dependent options) and no exception rule overrides it.
+// Safe to call on a nil receiver (returns false).
+func (rs *RuleSet) ShouldBlockRequest(rawURL string, ctx MatchContext) bool {
 	if rs == nil {
 		return false
 	}
@@ -164,7 +172,7 @@ func (rs *RuleSet) ShouldBlock(rawURL string) bool {
 	// Slow path: check URL against compiled pattern rules
 	if !blocked {
 		for _, rule := range rs.rules {
-			if rule.Match(rawURL) {
+			if rule.MatchWithContext(rawURL, ctx) {
 				blocked = true
 				break
 			}
@@ -177,7 +185,7 @@ func (rs *RuleSet) ShouldBlock(rawURL string) bool {
 
 	// Check if any exception rule allows this URL
 	for _, exc := range rs.exceptions {
-		if exc.Match(rawURL) {
+		if exc.MatchWithContext(rawURL, ctx) {
 			return false
 		}
 	}

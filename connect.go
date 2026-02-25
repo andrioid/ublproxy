@@ -75,7 +75,8 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port string) 
 
 		// URL-level blocking for pattern rules (hostname was already
 		// checked at CONNECT time; this catches path-specific rules)
-		if p.rules.ShouldBlock(targetURL) {
+		ctx := matchContextFromReferer(req.Header.Get("Referer"))
+		if p.rules.ShouldBlockRequest(targetURL, ctx) {
 			blocked := &http.Response{
 				StatusCode: http.StatusNoContent,
 				ProtoMajor: 1,

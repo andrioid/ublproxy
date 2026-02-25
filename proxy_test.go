@@ -543,3 +543,51 @@ func TestExceptionAllowsBlockedHTTPPath(t *testing.T) {
 		t.Errorf("upstream saw paths = %v, want [/ads/approved-banner.gif]", requestPaths)
 	}
 }
+
+func TestThirdPartyOption(t *testing.T) {
+	var requestPaths []string
+
+	rs := blocklist.NewRuleSet()
+	// Only block /ads/* when the request is cross-origin
+	rs.AddRule("/ads/*$third-party")
+
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPaths = append(requestPaths, r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	}), rs)
+
+	client := env.httpClient(t)
+
+	// Same-origin request (Referer matches request host): should NOT be blocked.
+	// The upstream runs on 127.0.0.1, so use a Referer from the same host.
+	req, _ := http.NewRequest("GET", env.httpURL+"/ads/banner.gif", nil)
+	req.Header.Set("Referer", env.httpURL+"/page.html")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET same-origin: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("same-origin status = %d, want %d (should not be blocked)", resp.StatusCode, http.StatusOK)
+	}
+
+	// Cross-origin request (Referer from different domain): should be blocked.
+	req, _ = http.NewRequest("GET", env.httpURL+"/ads/banner.gif", nil)
+	req.Header.Set("Referer", "http://differentdomain.com/page.html")
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("GET cross-origin: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("cross-origin status = %d, want %d (should be blocked)", resp.StatusCode, http.StatusNoContent)
+	}
+
+	// Only the same-origin request should have reached upstream
+	if len(requestPaths) != 1 || requestPaths[0] != "/ads/banner.gif" {
+		t.Errorf("upstream saw paths = %v, want [/ads/banner.gif]", requestPaths)
+	}
+}

@@ -19,6 +19,20 @@ const (
 	segSeparator                    // match a single separator char or end of string
 )
 
+// MatchContext provides additional information about a request for evaluating
+// context-dependent filter options like $third-party and $domain.
+type MatchContext struct {
+	PageDomain string // domain of the page that initiated the request (from Referer)
+}
+
+// Options holds parsed filter options from the $... suffix of a rule.
+type Options struct {
+	MatchCase      bool     // $match-case: case-sensitive matching
+	ThirdParty     *bool    // $third-party (true) or $~third-party (false), nil if unset
+	IncludeDomains []string // $domain=example.com|other.com
+	ExcludeDomains []string // $domain=~example.com
+}
+
 // Rule represents a compiled adblock filter pattern.
 type Rule struct {
 	segments     []segment
@@ -27,6 +41,7 @@ type Rule struct {
 	domainAnchor bool      // || at start: must match at domain boundary
 	domainSuffix string    // the domain part after || (e.g. "example.com")
 	pathPattern  []segment // the pattern after the domain part (e.g. "/ads/*.gif")
+	options      Options
 }
 
 // Compile parses an adblock filter pattern string into a Rule.
@@ -36,6 +51,17 @@ func Compile(pattern string) (*Rule, error) {
 	}
 
 	r := &Rule{}
+
+	// Extract $options suffix before processing the pattern
+	if idx := strings.LastIndexByte(pattern, '$'); idx >= 0 {
+		optStr := pattern[idx+1:]
+		pattern = pattern[:idx]
+		r.options = parseOptions(optStr)
+	}
+
+	if pattern == "" {
+		return nil, errors.New("empty pattern after options")
+	}
 
 	// Handle domain anchor (||)
 	if strings.HasPrefix(pattern, "||") {
@@ -56,8 +82,36 @@ func Compile(pattern string) (*Rule, error) {
 		pattern = pattern[:len(pattern)-1]
 	}
 
-	r.segments = compileSegments(pattern)
+	r.segments = compileSegments(pattern, r.options.MatchCase)
 	return r, nil
+}
+
+func parseOptions(optStr string) Options {
+	var opts Options
+	for _, opt := range strings.Split(optStr, ",") {
+		opt = strings.TrimSpace(opt)
+		switch {
+		case opt == "match-case":
+			opts.MatchCase = true
+		case opt == "third-party":
+			tp := true
+			opts.ThirdParty = &tp
+		case opt == "~third-party":
+			tp := false
+			opts.ThirdParty = &tp
+		case strings.HasPrefix(opt, "domain="):
+			domains := strings.Split(opt[7:], "|")
+			for _, d := range domains {
+				d = strings.TrimSpace(d)
+				if strings.HasPrefix(d, "~") {
+					opts.ExcludeDomains = append(opts.ExcludeDomains, strings.ToLower(d[1:]))
+				} else {
+					opts.IncludeDomains = append(opts.IncludeDomains, strings.ToLower(d))
+				}
+			}
+		}
+	}
+	return opts
 }
 
 // compileDomainAnchor handles ||domain.com/path patterns.
@@ -80,15 +134,17 @@ func compileDomainAnchor(r *Rule, pattern string) (*Rule, error) {
 			r.anchorEnd = true
 			rest = rest[:len(rest)-1]
 		}
-		r.pathPattern = compileSegments(rest)
+		r.pathPattern = compileSegments(rest, r.options.MatchCase)
 	}
 
 	return r, nil
 }
 
-func compileSegments(pattern string) []segment {
-	// Case-insensitive: lowercase the pattern (we'll lowercase the URL during match)
-	pattern = strings.ToLower(pattern)
+func compileSegments(pattern string, matchCase bool) []segment {
+	// Default is case-insensitive: lowercase the pattern
+	if !matchCase {
+		pattern = strings.ToLower(pattern)
+	}
 
 	var segments []segment
 	i := 0
@@ -115,9 +171,14 @@ func compileSegments(pattern string) []segment {
 	return segments
 }
 
-// Match reports whether the rule matches the given URL.
+// Match reports whether the rule's URL pattern matches the given URL.
+// Does not evaluate context-dependent options ($third-party, $domain).
+// Use MatchWithContext for full option evaluation.
 func (r *Rule) Match(rawURL string) bool {
-	url := strings.ToLower(rawURL)
+	url := rawURL
+	if !r.options.MatchCase {
+		url = strings.ToLower(rawURL)
+	}
 
 	if r.domainAnchor {
 		return r.matchDomainAnchor(url)
@@ -134,6 +195,72 @@ func (r *Rule) Match(rawURL string) bool {
 		}
 	}
 	return false
+}
+
+// MatchWithContext reports whether the rule matches the URL and all
+// context-dependent options ($third-party, $domain) are satisfied.
+func (r *Rule) MatchWithContext(rawURL string, ctx MatchContext) bool {
+	if !r.Match(rawURL) {
+		return false
+	}
+	return r.checkOptions(rawURL, ctx)
+}
+
+// HasContextOptions returns true if the rule has options that require
+// a MatchContext to evaluate (e.g. $third-party, $domain).
+func (r *Rule) HasContextOptions() bool {
+	return r.options.ThirdParty != nil ||
+		len(r.options.IncludeDomains) > 0 ||
+		len(r.options.ExcludeDomains) > 0
+}
+
+func (r *Rule) checkOptions(rawURL string, ctx MatchContext) bool {
+	if r.options.ThirdParty != nil {
+		requestDomain := extractHostFromURL(strings.ToLower(rawURL))
+		pageDomain := strings.ToLower(ctx.PageDomain)
+		isThirdParty := !domainMatchesOrIsSubdomain(requestDomain, pageDomain)
+
+		if *r.options.ThirdParty && !isThirdParty {
+			return false
+		}
+		if !*r.options.ThirdParty && isThirdParty {
+			return false
+		}
+	}
+
+	if len(r.options.IncludeDomains) > 0 {
+		pageDomain := strings.ToLower(ctx.PageDomain)
+		matched := false
+		for _, d := range r.options.IncludeDomains {
+			if domainMatchesOrIsSubdomain(pageDomain, d) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+
+	if len(r.options.ExcludeDomains) > 0 {
+		pageDomain := strings.ToLower(ctx.PageDomain)
+		for _, d := range r.options.ExcludeDomains {
+			if domainMatchesOrIsSubdomain(pageDomain, d) {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+// domainMatchesOrIsSubdomain returns true if domain equals target
+// or is a subdomain of target.
+func domainMatchesOrIsSubdomain(domain, target string) bool {
+	if domain == target {
+		return true
+	}
+	return strings.HasSuffix(domain, "."+target)
 }
 
 // matchDomainAnchor checks if the URL contains the domain at a domain boundary

@@ -93,3 +93,107 @@ func TestPatternMatch(t *testing.T) {
 		})
 	}
 }
+
+func TestMatchCase(t *testing.T) {
+	// Without $match-case, matching is case-insensitive (default)
+	rule, _ := blocklist.Compile("BannerAd.gif")
+	if !rule.Match("http://example.com/bannerad.gif") {
+		t.Error("default should be case-insensitive")
+	}
+
+	// With $match-case, matching is case-sensitive
+	rule, _ = blocklist.Compile("BannerAd.gif$match-case")
+	if !rule.Match("http://example.com/BannerAd.gif") {
+		t.Error("$match-case should match exact case")
+	}
+	if rule.Match("http://example.com/bannerad.gif") {
+		t.Error("$match-case should not match wrong case")
+	}
+}
+
+func TestThirdPartyOption(t *testing.T) {
+	// $third-party: only match when request is cross-origin
+	rule, _ := blocklist.Compile("/ads/*$third-party")
+
+	ctx := blocklist.MatchContext{PageDomain: "example.com"}
+
+	// Same origin: should not match
+	if rule.MatchWithContext("http://example.com/ads/banner.gif", ctx) {
+		t.Error("$third-party should not match same-origin request")
+	}
+
+	// Cross origin: should match
+	if !rule.MatchWithContext("http://adserver.net/ads/banner.gif", ctx) {
+		t.Error("$third-party should match cross-origin request")
+	}
+
+	// $~third-party: only match when request is same-origin
+	rule, _ = blocklist.Compile("/ads/*$~third-party")
+
+	if !rule.MatchWithContext("http://example.com/ads/banner.gif", ctx) {
+		t.Error("$~third-party should match same-origin request")
+	}
+	if rule.MatchWithContext("http://adserver.net/ads/banner.gif", ctx) {
+		t.Error("$~third-party should not match cross-origin request")
+	}
+}
+
+func TestDomainOption(t *testing.T) {
+	// $domain=example.com: only apply on pages from example.com
+	rule, _ := blocklist.Compile("/ads/*$domain=example.com")
+
+	if !rule.MatchWithContext("http://adserver.net/ads/banner.gif", blocklist.MatchContext{PageDomain: "example.com"}) {
+		t.Error("should match when page is example.com")
+	}
+	if !rule.MatchWithContext("http://adserver.net/ads/banner.gif", blocklist.MatchContext{PageDomain: "sub.example.com"}) {
+		t.Error("should match subdomain of domain option")
+	}
+	if rule.MatchWithContext("http://adserver.net/ads/banner.gif", blocklist.MatchContext{PageDomain: "other.com"}) {
+		t.Error("should not match when page is other.com")
+	}
+
+	// $domain=example.com|example.org: multiple domains
+	rule, _ = blocklist.Compile("/ads/*$domain=example.com|example.org")
+
+	if !rule.MatchWithContext("http://adserver.net/ads/banner.gif", blocklist.MatchContext{PageDomain: "example.com"}) {
+		t.Error("should match first domain")
+	}
+	if !rule.MatchWithContext("http://adserver.net/ads/banner.gif", blocklist.MatchContext{PageDomain: "example.org"}) {
+		t.Error("should match second domain")
+	}
+	if rule.MatchWithContext("http://adserver.net/ads/banner.gif", blocklist.MatchContext{PageDomain: "other.com"}) {
+		t.Error("should not match unlisted domain")
+	}
+
+	// $domain=~example.com: exclude domain
+	rule, _ = blocklist.Compile("/ads/*$domain=~example.com")
+
+	if rule.MatchWithContext("http://adserver.net/ads/banner.gif", blocklist.MatchContext{PageDomain: "example.com"}) {
+		t.Error("should not match excluded domain")
+	}
+	if !rule.MatchWithContext("http://adserver.net/ads/banner.gif", blocklist.MatchContext{PageDomain: "other.com"}) {
+		t.Error("should match non-excluded domain")
+	}
+}
+
+func TestOptionsStrippedFromPattern(t *testing.T) {
+	// The $options suffix should not be part of the URL pattern
+	rule, _ := blocklist.Compile("/ads/banner.gif$match-case")
+	if !rule.Match("http://example.com/ads/banner.gif") {
+		t.Error("pattern should match URL without $options suffix")
+	}
+
+	// With $match-case, pattern should be case-sensitive
+	if rule.Match("http://example.com/ads/Banner.gif") {
+		t.Error("$match-case pattern should not match different case")
+	}
+
+	// Verify options don't leak into the pattern by using an end anchor
+	rule2, _ := blocklist.Compile("/ads/banner.gif|$match-case")
+	if !rule2.Match("http://example.com/ads/banner.gif") {
+		t.Error("end-anchored pattern should match exact ending")
+	}
+	if rule2.Match("http://example.com/ads/banner.gif?v=1") {
+		t.Error("end-anchored pattern should not match with trailing chars")
+	}
+}
