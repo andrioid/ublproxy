@@ -1,6 +1,9 @@
 package blocklist
 
-import "strings"
+import (
+	"strings"
+	"sync"
+)
 
 // ElementHideRule represents a CSS element hiding rule from an adblock filter.
 type ElementHideRule struct {
@@ -66,18 +69,14 @@ func parseDomainList(domainStr string, rule *ElementHideRule) {
 }
 
 // appliesTo returns true if this element hiding rule should be applied
-// for the given domain.
+// for the given domain. The domain must already be lowercased.
 func (r *ElementHideRule) appliesTo(domain string) bool {
-	domain = strings.ToLower(domain)
-
-	// Check exclude domains first
 	for _, d := range r.ExcludeDomains {
 		if domainMatchesOrIsSubdomain(domain, d) {
 			return false
 		}
 	}
 
-	// If include domains are specified, domain must match one of them
 	if len(r.IncludeDomains) > 0 {
 		for _, d := range r.IncludeDomains {
 			if domainMatchesOrIsSubdomain(domain, d) {
@@ -87,37 +86,70 @@ func (r *ElementHideRule) appliesTo(domain string) bool {
 		return false
 	}
 
-	// No domain restrictions — applies to all domains
 	return true
 }
 
+// elemHideIndex provides fast lookup for element hiding exception rules
+// by selector, and caches computed CSS per domain.
+type elemHideIndex struct {
+	// exceptions maps CSS selector -> list of exception rules for that selector
+	exceptions map[string][]*ElementHideRule
+	// cssCache stores computed CSS per domain (immutable after RuleSet loading)
+	cssCache sync.Map
+}
+
+func newElemHideIndex() *elemHideIndex {
+	return &elemHideIndex{
+		exceptions: make(map[string][]*ElementHideRule),
+	}
+}
+
+// addException indexes an element hiding exception rule by its selector.
+func (idx *elemHideIndex) addException(rule *ElementHideRule) {
+	idx.exceptions[rule.Selector] = append(idx.exceptions[rule.Selector], rule)
+}
+
+// isExcepted returns true if the selector is overridden by an exception
+// rule for the given domain. The domain must already be lowercased.
+func (idx *elemHideIndex) isExcepted(selector, domain string) bool {
+	excRules := idx.exceptions[selector]
+	for _, exc := range excRules {
+		if exc.appliesTo(domain) {
+			return true
+		}
+	}
+	return false
+}
+
 // CSSForDomain returns a CSS stylesheet that hides all elements matching
-// the element hiding rules for the given domain. Returns empty string if
-// no rules apply. Safe to call on a nil receiver.
+// the element hiding rules for the given domain. Results are cached.
+// Returns empty string if no rules apply. Safe to call on a nil receiver.
 func (rs *RuleSet) CSSForDomain(domain string) string {
-	if rs == nil {
+	if rs == nil || rs.elemHideIdx == nil {
 		return ""
 	}
 
-	// Collect applicable selectors
+	domain = strings.ToLower(domain)
+
+	// Check cache
+	if cached, ok := rs.elemHideIdx.cssCache.Load(domain); ok {
+		return cached.(string)
+	}
+
+	css := rs.computeCSSForDomain(domain)
+	rs.elemHideIdx.cssCache.Store(domain, css)
+	return css
+}
+
+func (rs *RuleSet) computeCSSForDomain(domain string) string {
 	var selectors []string
 	for _, rule := range rs.elemHideRules {
 		if rule.Exception || !rule.appliesTo(domain) {
 			continue
 		}
-
-		// Check if an exception rule overrides this selector for this domain
-		excepted := false
-		for _, exc := range rs.elemHideRules {
-			if exc.Exception && exc.Selector == rule.Selector && exc.appliesTo(domain) {
-				excepted = true
-				break
-			}
-		}
-		if excepted {
+		if rs.elemHideIdx.isExcepted(rule.Selector, domain) {
 			continue
 		}
-
 		selectors = append(selectors, rule.Selector)
 	}
 

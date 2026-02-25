@@ -16,10 +16,14 @@ type RuleSet struct {
 	rules         []*Rule
 	exceptions    []*Rule
 	elemHideRules []*ElementHideRule
+	elemHideIdx   *elemHideIndex
 }
 
 func NewRuleSet() *RuleSet {
-	return &RuleSet{hosts: make(map[string]struct{})}
+	return &RuleSet{
+		hosts:       make(map[string]struct{}),
+		elemHideIdx: newElemHideIndex(),
+	}
 }
 
 // AddHostname adds a hostname to the fast-path blocklist.
@@ -93,6 +97,9 @@ func (rs *RuleSet) AddLine(line string) {
 	if strings.Contains(line, "##") || strings.Contains(line, "#@#") {
 		if rule := parseElementHideRule(line); rule != nil {
 			rs.elemHideRules = append(rs.elemHideRules, rule)
+			if rule.Exception {
+				rs.elemHideIdx.addException(rule)
+			}
 		}
 		return
 	}
