@@ -64,6 +64,81 @@ curl --proxy http://127.0.0.1:8080 http://example.com
 curl --proxy http://127.0.0.1:8080 --cacert ~/.ublproxy/ca.crt https://example.com
 ```
 
+## Testing with Playwright
+
+Playwright lets you test the proxy in a real browser — verifying both request blocking and element hiding CSS injection against live websites.
+
+### Setup
+
+Start the proxy with a blocklist, then open browsers with and without the proxy:
+
+```sh
+# Terminal 1: start the proxy with Icelandic adblock rules
+mise run dev -- --blocklist examples/is.rules
+
+# Terminal 2: open a browser routed through the proxy
+mise run browser -- https://1819.is
+
+# Optional: open a second browser without the proxy for comparison
+mise run browser-no-proxy -- https://1819.is
+```
+
+The `browser` script sets `PLAYWRIGHT_MCP_PROXY_SERVER` and `PLAYWRIGHT_MCP_IGNORE_HTTPS_ERRORS` environment variables so all traffic routes through the proxy and the browser accepts the proxy's MITM certificates.
+
+Both scripts create named sessions (`proxy` and `no-proxy`), so you interact with them using `playwright-cli -s=proxy <command>` and `playwright-cli -s=no-proxy <command>`.
+
+### Verifying element hiding
+
+Check that the proxy injected a `<style>` tag with ad-hiding CSS:
+
+```sh
+playwright-cli -s=proxy eval "() => {
+  const injected = [...document.querySelectorAll('style')].filter(s =>
+    s.textContent.includes('display: none !important')
+  );
+  return { found: injected.length > 0, css: injected.map(s => s.textContent).join('') };
+}"
+```
+
+### Verifying request blocking
+
+Use the network log to see which requests were blocked by the proxy:
+
+```sh
+playwright-cli -s=proxy network
+```
+
+Requests to blocked domains (e.g. `kynning.olis.is`, `openad.visir.is`) should appear as failed.
+
+### Taking comparison screenshots
+
+```sh
+playwright-cli -s=proxy screenshot --filename=tmp/with-proxy.png
+playwright-cli -s=no-proxy screenshot --filename=tmp/without-proxy.png
+```
+
+### Cleanup
+
+```sh
+playwright-cli -s=proxy close
+playwright-cli -s=no-proxy close
+```
+
+### Testing other sites
+
+The `is.rules` blocklist covers many Icelandic sites. Try any of them:
+
+```sh
+playwright-cli -s=proxy goto https://visir.is
+playwright-cli -s=proxy goto https://dv.is
+```
+
+You can also combine multiple blocklists:
+
+```sh
+mise run dev -- --blocklist examples/is.rules --blocklist examples/dev.rules
+```
+
 ## Testing
 
 ```sh
