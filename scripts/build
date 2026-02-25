@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Build the ublproxy binary"
+set -euo pipefail
+
+go build -o ublproxy .
+echo "Built ./ublproxy"

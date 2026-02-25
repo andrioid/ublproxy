@@ -1,0 +1,343 @@
+package main
+
+import (
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+)
+
+// testEnv holds everything needed to run a proxy e2e test.
+type testEnv struct {
+	proxyURL string
+	httpURL  string
+	httpsURL string
+	caPool   *x509.CertPool
+}
+
+// startTestEnv spins up an upstream HTTP server, an upstream HTTPS server, and
+// the proxy itself. The CA is generated in-memory — no disk I/O.
+func startTestEnv(t *testing.T, upstreamHandler http.Handler) *testEnv {
+	t.Helper()
+
+	// Upstream servers
+	httpServer := httptest.NewServer(upstreamHandler)
+	httpsServer := httptest.NewTLSServer(upstreamHandler)
+
+	// In-memory CA
+	caCert, caKey, err := generateCA()
+	if err != nil {
+		t.Fatalf("generateCA: %v", err)
+	}
+
+	certs := newCertCache(caCert, caKey)
+	caCertPEM := encodeCertPEM(caCert)
+	handler := newProxyHandler(certs, caCertPEM)
+
+	// The proxy needs a real http.Server (not httptest) so that Hijack works
+	// on the ResponseWriter. httptest.NewServer wraps net/http.Server, which
+	// does support Hijack, so this is fine.
+	proxyServer := httptest.NewServer(handler)
+
+	// Build a CertPool that trusts our test CA so the HTTP client validates
+	// the MITM certificates the proxy presents.
+	caPool := x509.NewCertPool()
+	caPool.AddCert(caCert)
+
+	t.Cleanup(func() {
+		proxyServer.Close()
+		httpServer.Close()
+		httpsServer.Close()
+	})
+
+	return &testEnv{
+		proxyURL: proxyServer.URL,
+		httpURL:  httpServer.URL,
+		httpsURL: httpsServer.URL,
+		caPool:   caPool,
+	}
+}
+
+// httpClient returns an *http.Client configured to route through the proxy.
+// For HTTPS requests, it trusts the test CA.
+func (e *testEnv) httpClient(t *testing.T) *http.Client {
+	t.Helper()
+
+	proxyURL, err := url.Parse(e.proxyURL)
+	if err != nil {
+		t.Fatalf("parse proxy URL: %v", err)
+	}
+
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+			TLSClientConfig: &tls.Config{
+				RootCAs: e.caPool,
+			},
+		},
+	}
+}
+
+func TestHTTPProxy(t *testing.T) {
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("hello from upstream"))
+	}))
+
+	client := env.httpClient(t)
+	resp, err := client.Get(env.httpURL + "/test")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "hello from upstream" {
+		t.Errorf("body = %q, want %q", body, "hello from upstream")
+	}
+}
+
+func TestHTTPProxyHeaders(t *testing.T) {
+	var receivedHeaders http.Header
+
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedHeaders = r.Header.Clone()
+		w.Header().Set("X-Upstream-Header", "present")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	client := env.httpClient(t)
+
+	req, err := http.NewRequest("GET", env.httpURL+"/headers", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("X-Custom-Header", "test-value")
+	req.Header.Set("Connection", "keep-alive")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Custom header should be forwarded to upstream
+	if got := receivedHeaders.Get("X-Custom-Header"); got != "test-value" {
+		t.Errorf("upstream X-Custom-Header = %q, want %q", got, "test-value")
+	}
+
+	// Hop-by-hop headers should be stripped before forwarding
+	if got := receivedHeaders.Get("Connection"); got != "" {
+		t.Errorf("upstream Connection header = %q, want it stripped", got)
+	}
+
+	// Response headers from upstream should be forwarded to client
+	if got := resp.Header.Get("X-Upstream-Header"); got != "present" {
+		t.Errorf("response X-Upstream-Header = %q, want %q", got, "present")
+	}
+}
+
+func TestHTTPSProxy(t *testing.T) {
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("hello from tls upstream"))
+	}))
+
+	client := env.httpClient(t)
+	resp, err := client.Get(env.httpsURL + "/secure")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "hello from tls upstream" {
+		t.Errorf("body = %q, want %q", body, "hello from tls upstream")
+	}
+}
+
+func TestHTTPSProxyHeaders(t *testing.T) {
+	var receivedHeaders http.Header
+
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedHeaders = r.Header.Clone()
+		w.Header().Set("X-Upstream-Secure", "yes")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	client := env.httpClient(t)
+
+	req, err := http.NewRequest("GET", env.httpsURL+"/secure-headers", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("X-Custom-Secure", "secure-value")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := receivedHeaders.Get("X-Custom-Secure"); got != "secure-value" {
+		t.Errorf("upstream X-Custom-Secure = %q, want %q", got, "secure-value")
+	}
+
+	if got := resp.Header.Get("X-Upstream-Secure"); got != "yes" {
+		t.Errorf("response X-Upstream-Secure = %q, want %q", got, "yes")
+	}
+}
+
+func TestHTTPProxyPOST(t *testing.T) {
+	var receivedBody string
+
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		receivedBody = string(body)
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte("created"))
+	}))
+
+	client := env.httpClient(t)
+	resp, err := client.Post(env.httpURL+"/create", "text/plain", strings.NewReader("request body"))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+
+	if receivedBody != "request body" {
+		t.Errorf("upstream body = %q, want %q", receivedBody, "request body")
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "created" {
+		t.Errorf("response body = %q, want %q", body, "created")
+	}
+}
+
+func TestPortalPage(t *testing.T) {
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Direct request to the proxy (not through it as a proxy)
+	resp, err := http.Get(env.proxyURL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if !strings.Contains(contentType, "text/html") {
+		t.Errorf("Content-Type = %q, want it to contain %q", contentType, "text/html")
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	for _, want := range []string{"ublproxy", "ca.crt", "Install"} {
+		if !strings.Contains(bodyStr, want) {
+			t.Errorf("body does not contain %q", want)
+		}
+	}
+}
+
+func TestPortalCACertDownload(t *testing.T) {
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Direct request to download the CA cert
+	resp, err := http.Get(env.proxyURL + "/ca.crt")
+	if err != nil {
+		t.Fatalf("GET /ca.crt: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType != "application/x-pem-file" {
+		t.Errorf("Content-Type = %q, want %q", contentType, "application/x-pem-file")
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.HasPrefix(bodyStr, "-----BEGIN CERTIFICATE-----") {
+		t.Errorf("body does not start with PEM header, got %q", bodyStr[:min(len(bodyStr), 40)])
+	}
+
+	// Verify the PEM can be decoded and parsed as a valid certificate
+	block, _ := pem.Decode(body)
+	if block == nil {
+		t.Fatal("failed to decode PEM block from response body")
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("failed to parse certificate: %v", err)
+	}
+
+	if !cert.IsCA {
+		t.Error("downloaded certificate is not a CA certificate")
+	}
+
+	if cert.Subject.CommonName != "ublproxy CA" {
+		t.Errorf("certificate CN = %q, want %q", cert.Subject.CommonName, "ublproxy CA")
+	}
+}
+
+func TestHTTPSProxyPOST(t *testing.T) {
+	var receivedBody string
+
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		receivedBody = string(body)
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte("created securely"))
+	}))
+
+	client := env.httpClient(t)
+	resp, err := client.Post(env.httpsURL+"/secure-create", "text/plain", strings.NewReader("secure body"))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+
+	if receivedBody != "secure body" {
+		t.Errorf("upstream body = %q, want %q", receivedBody, "secure body")
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "created securely" {
+		t.Errorf("response body = %q, want %q", body, "created securely")
+	}
+}
