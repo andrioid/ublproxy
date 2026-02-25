@@ -10,10 +10,12 @@ import (
 // RuleSet holds blocking rules for URL filtering. It combines a hostname map
 // (fast path for ||hostname^ rules) with compiled URL pattern rules.
 // Exception rules (@@) override blocking rules when they match.
+// Element hiding rules (##) provide CSS selectors to hide page elements.
 type RuleSet struct {
-	hosts      map[string]struct{}
-	rules      []*Rule
-	exceptions []*Rule
+	hosts         map[string]struct{}
+	rules         []*Rule
+	exceptions    []*Rule
+	elemHideRules []*ElementHideRule
 }
 
 func NewRuleSet() *RuleSet {
@@ -61,28 +63,40 @@ func (rs *RuleSet) LoadFile(path string) error {
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		rs.addLine(scanner.Text())
+		rs.AddLine(scanner.Text())
 	}
 	return scanner.Err()
 }
 
-// addLine parses a single line from a blocklist file and adds it to the
-// appropriate data structure (hostname map or compiled rule list).
-func (rs *RuleSet) addLine(line string) {
+// AddLine parses a single line from a blocklist file and adds it to the
+// appropriate data structure (hostname map, compiled rule, or element hiding rule).
+func (rs *RuleSet) AddLine(line string) {
 	line = strings.TrimSpace(line)
 
-	if line == "" || line[0] == '!' || line[0] == '#' || line[0] == '[' {
+	if line == "" || line[0] == '!' || line[0] == '[' {
 		return
 	}
 
-	// Exception rules
+	// Comments: lines starting with # that aren't element hiding rules (##).
+	// Hosts-file comments start with "# " but element hiding rules start with "##".
+	if line[0] == '#' && !strings.HasPrefix(line, "##") {
+		return
+	}
+
+	// Exception rules (@@)
 	if strings.HasPrefix(line, "@@") {
 		rs.AddException(line)
 		return
 	}
 
-	// Element hiding / snippet filters
-	if strings.Contains(line, "##") || strings.Contains(line, "#$#") || strings.Contains(line, "#?#") || strings.Contains(line, "#@#") {
+	// Element hiding rules (##, #@#) and unsupported filters (#?#, #$#).
+	if strings.Contains(line, "##") || strings.Contains(line, "#@#") {
+		if rule := parseElementHideRule(line); rule != nil {
+			rs.elemHideRules = append(rs.elemHideRules, rule)
+		}
+		return
+	}
+	if strings.Contains(line, "#?#") || strings.Contains(line, "#$#") {
 		return
 	}
 

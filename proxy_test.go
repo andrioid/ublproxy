@@ -591,3 +591,107 @@ func TestThirdPartyOption(t *testing.T) {
 		t.Errorf("upstream saw paths = %v, want [/ads/banner.gif]", requestPaths)
 	}
 }
+
+func TestElementHidingInjectsCSS(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("##.ad-banner")
+	rs.AddLine("##.tracking-pixel")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head><title>Test</title></head><body><div class="ad-banner">Ad</div></body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Should contain injected style tag
+	if !strings.Contains(bodyStr, "<style>") {
+		t.Errorf("response should contain <style> tag, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, ".ad-banner") {
+		t.Errorf("response should contain .ad-banner selector, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, ".tracking-pixel") {
+		t.Errorf("response should contain .tracking-pixel selector, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "display: none !important") {
+		t.Errorf("response should contain 'display: none !important', got:\n%s", bodyStr)
+	}
+
+	// Original content should still be present
+	if !strings.Contains(bodyStr, "<title>Test</title>") {
+		t.Errorf("original content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestElementHidingSkipsNonHTML(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("##.ad-banner")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status": "ok"}`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/api/data")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// JSON response should not be modified
+	if strings.Contains(bodyStr, "<style>") {
+		t.Errorf("non-HTML response should not be modified, got:\n%s", bodyStr)
+	}
+	if bodyStr != `{"status": "ok"}` {
+		t.Errorf("body = %q, want %q", bodyStr, `{"status": "ok"}`)
+	}
+}
+
+func TestElementHidingHTTPS(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("##.ad-banner")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head></head><body>Hello</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpsURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "<style>") {
+		t.Errorf("HTTPS response should also have CSS injected, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, ".ad-banner") {
+		t.Errorf("HTTPS response should contain .ad-banner selector, got:\n%s", bodyStr)
+	}
+}

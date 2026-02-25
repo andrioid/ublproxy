@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"io"
 	"net"
@@ -93,11 +94,20 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port string) 
 		req.RequestURI = ""
 
 		removeHopByHopHeaders(req.Header)
+		stripAcceptEncoding(req.Header)
 
 		resp, err := p.transport.RoundTrip(req)
 		if err != nil {
 			logError("connect/roundtrip", err)
 			return
+		}
+
+		// Inject element hiding CSS into HTML responses
+		if modified, ok := p.injectElementHidingCSS(resp, host); ok {
+			resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(modified))
+			resp.ContentLength = int64(len(modified))
+			resp.Header.Del("Content-Length")
 		}
 
 		if err := resp.Write(clientTLS); err != nil {
