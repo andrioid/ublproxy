@@ -95,6 +95,12 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port string) 
 
 		removeHopByHopHeaders(req.Header)
 
+		// Downgrade to gzip-only when we may need to decompress HTML for CSS
+		// injection. We can only decompress gzip, not brotli or other encodings.
+		if p.rules.CSSForDomain(host) != "" {
+			req.Header.Set("Accept-Encoding", "gzip")
+		}
+
 		resp, err := p.transport.RoundTrip(req)
 		if err != nil {
 			logError("connect/roundtrip", err)

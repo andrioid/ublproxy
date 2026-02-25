@@ -41,6 +41,12 @@ func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	copyHeaders(outReq.Header, r.Header)
 	removeHopByHopHeaders(outReq.Header)
 
+	// Downgrade to gzip-only when we may need to decompress HTML for CSS
+	// injection. We can only decompress gzip, not brotli or other encodings.
+	if p.rules.CSSForDomain(r.URL.Hostname()) != "" {
+		outReq.Header.Set("Accept-Encoding", "gzip")
+	}
+
 	resp, err := p.transport.RoundTrip(outReq)
 	if err != nil {
 		logError("http/roundtrip", err)

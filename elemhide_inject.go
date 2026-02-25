@@ -27,10 +27,14 @@ func (p *proxyHandler) injectElementHidingCSS(resp *http.Response, host string) 
 		return nil, false
 	}
 
-	// Decompress if gzip-encoded
+	// Only decompress gzip — bail on other encodings (e.g. brotli) to avoid
+	// corrupting compressed bytes we can't decode
 	var body []byte
 	var err error
 	encoding := resp.Header.Get("Content-Encoding")
+	if encoding != "" && !strings.Contains(encoding, "gzip") {
+		return nil, false
+	}
 	if strings.Contains(encoding, "gzip") {
 		gr, gzErr := gzip.NewReader(resp.Body)
 		if gzErr != nil {

@@ -666,6 +666,83 @@ func TestElementHidingSkipsNonHTML(t *testing.T) {
 	}
 }
 
+func TestElementHidingDowngradesAcceptEncoding(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("##.ad-banner")
+
+	var receivedAcceptEncoding string
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAcceptEncoding = r.Header.Get("Accept-Encoding")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head></head><body>Hello</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	// Send a request with Accept-Encoding that includes brotli
+	req, _ := http.NewRequest("GET", env.httpURL+"/page.html", nil)
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	io.ReadAll(resp.Body)
+
+	// The proxy should downgrade Accept-Encoding to gzip only, because
+	// the domain has element hiding rules and the proxy needs to decompress
+	// the response to inject CSS
+	if receivedAcceptEncoding != "gzip" {
+		t.Errorf("upstream Accept-Encoding = %q, want %q", receivedAcceptEncoding, "gzip")
+	}
+}
+
+func TestElementHidingNonGzipPassesThrough(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("##.ad-banner")
+
+	// Simulate a server that responds with brotli-encoded HTML. The proxy
+	// cannot decompress brotli, so it must pass the response through
+	// unmodified rather than corrupting it.
+	htmlBody := `<html><head></head><body>Hello</body></html>`
+	fakeCompressed := []byte{0x1b, 0x2f, 0x00, 0xf0} // not real brotli, just binary garbage
+	fakeCompressed = append(fakeCompressed, []byte(htmlBody)...)
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Encoding", "br")
+		w.WriteHeader(http.StatusOK)
+		w.Write(fakeCompressed)
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	// Disable automatic decompression so we can inspect raw bytes
+	client.Transport.(*http.Transport).DisableCompression = true
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	// The response must be passed through exactly as the upstream sent it.
+	// Before the fix, the proxy would try to inject CSS into the compressed
+	// bytes, corrupting the response.
+	if len(body) != len(fakeCompressed) {
+		t.Errorf("body length = %d, want %d (response was modified)", len(body), len(fakeCompressed))
+	}
+	if resp.Header.Get("Content-Encoding") != "br" {
+		t.Errorf("Content-Encoding = %q, want %q", resp.Header.Get("Content-Encoding"), "br")
+	}
+}
+
 func TestElementHidingHTTPS(t *testing.T) {
 	rs := blocklist.NewRuleSet()
 	rs.AddLine("##.ad-banner")
