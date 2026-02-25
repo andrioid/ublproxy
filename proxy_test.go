@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"crypto/sha1"
 	"crypto/tls"
 	"crypto/x509"
@@ -13,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -685,37 +688,61 @@ func TestElementHidingSkipsNonHTML(t *testing.T) {
 	}
 }
 
-func TestElementHidingDowngradesAcceptEncoding(t *testing.T) {
+func TestNonHTMLPreservesCompression(t *testing.T) {
 	rs := blocklist.NewRuleSet()
 	rs.AddLine("##.ad-banner")
 
-	var receivedAcceptEncoding string
+	svgContent := `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><circle cx="50" cy="50" r="40"/></svg>`
 
+	// Upstream serves gzip-compressed SVG when client accepts gzip
 	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedAcceptEncoding = r.Header.Get("Accept-Encoding")
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			var buf bytes.Buffer
+			gz := gzip.NewWriter(&buf)
+			gz.Write([]byte(svgContent))
+			gz.Close()
+
+			w.Header().Set("Content-Type", "image/svg+xml")
+			w.Header().Set("Content-Encoding", "gzip")
+			w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+			w.WriteHeader(http.StatusOK)
+			w.Write(buf.Bytes())
+			return
+		}
+		w.Header().Set("Content-Type", "image/svg+xml")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`<html><head></head><body>Hello</body></html>`))
+		w.Write([]byte(svgContent))
 	})
 
 	env := startTestEnv(t, upstream, rs)
 	client := env.httpClient(t)
+	client.Transport.(*http.Transport).DisableCompression = true
 
-	// Send a request with Accept-Encoding that includes brotli
-	req, _ := http.NewRequest("GET", env.httpURL+"/page.html", nil)
-	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	req, _ := http.NewRequest("GET", env.httpsURL+"/icon.svg", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
 	defer resp.Body.Close()
-	io.ReadAll(resp.Body)
 
-	// The proxy should downgrade Accept-Encoding to gzip only, because
-	// the domain has element hiding rules and the proxy needs to decompress
-	// the response to inject CSS
-	if receivedAcceptEncoding != "gzip" {
-		t.Errorf("upstream Accept-Encoding = %q, want %q", receivedAcceptEncoding, "gzip")
+	body, _ := io.ReadAll(resp.Body)
+
+	// The proxy must not corrupt non-HTML resources. The gzip body and
+	// Content-Encoding header should arrive intact at the client.
+	if resp.Header.Get("Content-Encoding") != "gzip" {
+		t.Errorf("Content-Encoding = %q, want %q", resp.Header.Get("Content-Encoding"), "gzip")
+	}
+
+	gr, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("body is not valid gzip: %v", err)
+	}
+	decoded, _ := io.ReadAll(gr)
+	gr.Close()
+
+	if string(decoded) != svgContent {
+		t.Errorf("decoded SVG = %q, want %q", decoded, svgContent)
 	}
 }
 

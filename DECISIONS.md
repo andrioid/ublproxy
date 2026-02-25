@@ -1,7 +1,7 @@
 # Decisions
 
 - 2026-02-25 m+git@andri.dk — Validate upstream TLS certificates (removed `InsecureSkipVerify`). The proxy is the user's trust boundary; it must verify upstream server identity.
-- 2026-02-25 m+git@andri.dk — Downgrade `Accept-Encoding` to gzip only for domains with element hiding rules. We can only decompress gzip for CSS injection; brotli would corrupt the response.
+- 2026-02-25 m+git@andri.dk — Don't manipulate `Accept-Encoding`. The proxy forwards the client's encoding preferences to upstream and handles CSS injection based on the response `Content-Encoding`. Gzip HTML is decompressed for injection; brotli/zstd HTML passes through without injection. Non-HTML resources are never touched.
 - 2026-02-25 m+git@andri.dk — Skip CSS injection for HEAD requests. HEAD responses have no body per HTTP spec.
 - 2026-02-25 m+git@andri.dk — Hostname-only rules with `$options` (e.g. `||host^$third-party`) bypass the fast-path hostname map and go through compiled rules to preserve option evaluation.
 - 2026-02-25 m+git@andri.dk — `$match-case` rules receive both the original-case and lowercased URL so they match correctly through the optimized `ShouldBlockRequest` path.
