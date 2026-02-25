@@ -3,4 +3,4 @@
 #MISE depends=["build"]
 set -euo pipefail
 
-exec ./ublproxy "$@"
+exec ./ublproxy --blocklist examples/dev.rules "$@"

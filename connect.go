@@ -94,7 +94,6 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port string) 
 		req.RequestURI = ""
 
 		removeHopByHopHeaders(req.Header)
-		stripAcceptEncoding(req.Header)
 
 		resp, err := p.transport.RoundTrip(req)
 		if err != nil {

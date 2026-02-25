@@ -40,8 +40,6 @@ func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	copyHeaders(outReq.Header, r.Header)
 	removeHopByHopHeaders(outReq.Header)
-	// Request uncompressed responses so we can inject element hiding CSS
-	stripAcceptEncoding(outReq.Header)
 
 	resp, err := p.transport.RoundTrip(outReq)
 	if err != nil {

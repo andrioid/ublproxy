@@ -1,0 +1,61 @@
+[Adblock Plus 2.0]
+! ublproxy development rules
+! Uses fake domains — safe for local testing
+
+! ---- Hostname blocking ----
+
+! Adblock format: block domain and all subdomains
+||ads.example.com^
+||tracker.example.net^
+||analytics.example.org^
+
+! Hosts-file format
+0.0.0.0 malware.example.com
+127.0.0.1 spyware.example.net
+
+! ---- URL pattern matching ----
+
+! Wildcard: block any .gif in /ads/ paths
+/ads/banner*.gif
+! Separator: block URLs with "tracking" followed by a separator
+/tracking^
+! Domain anchor with path: block specific path on a domain
+||cdn.example.com/popups/*
+! Start anchor: only block http (not https)
+|http://insecure.example.com/
+! End anchor: block URLs ending in .swf
+.swf|
+
+! ---- Exception rules ----
+
+! Allow approved ads on an otherwise blocked domain
+@@||ads.example.com/approved/*
+! Allow a specific tracking partner
+@@/tracking^*partner=trusted
+
+! ---- Filter options ----
+
+! Only block cross-origin ad requests
+/cross-origin-ads/*$third-party
+! Only block ads when browsing example.com
+/contextual-ads/*$domain=example.com
+! Case-sensitive match
+/CaseSensitiveAd.js$match-case
+
+! ---- Element hiding ----
+
+! Global: hide ad elements on all sites
+##.ad-banner
+##.sponsored-content
+###sidebar-ad
+##div[class*="advertisement"]
+
+! Domain-specific: only hide on example.com
+example.com##.site-promo
+example.com,example.net##.partner-widget
+
+! Exclude: hide everywhere except example.org
+~example.org##.generic-overlay
+
+! Element hiding exception: don't hide .ad-banner on safe.example.com
+safe.example.com#@#.ad-banner
