@@ -89,6 +89,8 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port string) 
 			continue
 		}
 
+		upgradeReq := isWebSocketUpgrade(req.Header)
+
 		start := time.Now()
 		req.URL.Scheme = "https"
 		req.URL.Host = net.JoinHostPort(host, port)
@@ -96,15 +98,42 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port string) 
 
 		removeHopByHopHeaders(req.Header)
 
+		// Re-add upgrade headers that were stripped as hop-by-hop
+		if upgradeReq {
+			req.Header.Set("Connection", "Upgrade")
+			req.Header.Set("Upgrade", "websocket")
+		}
+
 		// Downgrade to gzip-only when we may need to decompress HTML for CSS
 		// injection. We can only decompress gzip, not brotli or other encodings.
-		if p.rules.CSSForDomain(host) != "" {
+		if !upgradeReq && p.rules.CSSForDomain(host) != "" {
 			req.Header.Set("Accept-Encoding", "gzip")
 		}
 
 		resp, err := p.transport.RoundTrip(req)
 		if err != nil {
 			logError("connect/roundtrip", err)
+			return
+		}
+
+		// WebSocket upgrade: switch to bidirectional copy
+		if upgradeReq && resp.StatusCode == http.StatusSwitchingProtocols {
+			upstreamConn, ok := resp.Body.(io.ReadWriteCloser)
+			if !ok {
+				resp.Body.Close()
+				logError("connect/upgrade", io.ErrUnexpectedEOF)
+				return
+			}
+			defer upstreamConn.Close()
+
+			resp.Body = nil
+			resp.Write(clientTLS)
+
+			logRequest(req.Method, targetURL+" [websocket]", resp.StatusCode, time.Since(start))
+
+			// clientReader may have buffered bytes past the HTTP request,
+			// so we read from it (not raw clientTLS). Writes go to clientTLS.
+			bidirectionalCopy(&readerWriter{r: clientReader, w: clientTLS}, upstreamConn)
 			return
 		}
 

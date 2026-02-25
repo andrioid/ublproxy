@@ -10,5 +10,5 @@
 - 2026-02-25 m+git@andri.dk — Cache `CSSForDomain` results in `sync.Map` since the ruleset is immutable after loading.
 - 2026-02-25 m+git@andri.dk — Serve decompressed HTML to client after CSS injection (no re-compression). Proxy-to-client hop is typically localhost.
 - 2026-02-25 m+git@andri.dk — Go stdlib only. No third-party dependencies unless strongly warranted.
-- 2026-02-25 m+git@andri.dk — WebSocket upgrade is not supported (Upgrade header stripped as hop-by-hop). Acceptable for an ad-blocking proxy.
+- 2026-02-25 m+git@andri.dk — WebSocket upgrade supported for both ws:// and wss://. Upgrade headers are re-added after hop-by-hop stripping, then bidirectional copy bridges client and upstream after 101.
 - 2026-02-25 m+git@andri.dk — Cert cache has no eviction. Certs are generated with 24h validity. Acceptable for personal use.

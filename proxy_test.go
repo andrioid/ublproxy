@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bufio"
+	"crypto/sha1"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -73,6 +78,12 @@ func startTestEnv(t *testing.T, upstreamHandler http.Handler, rules *blocklist.R
 		httpsURL: httpsServer.URL,
 		caPool:   caPool,
 	}
+}
+
+// httpsHost returns the host:port of the HTTPS upstream server.
+func (e *testEnv) httpsHost() string {
+	u, _ := url.Parse(e.httpsURL)
+	return u.Host
 }
 
 // httpClient returns an *http.Client configured to route through the proxy.
@@ -810,5 +821,256 @@ func TestHeadRequestNoInjection(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+}
+
+// --- WebSocket test helpers ---
+
+// wsEchoHandler is a minimal WebSocket echo server using only stdlib.
+// It performs the WebSocket handshake, then echoes back any frames it receives.
+func wsEchoHandler(w http.ResponseWriter, r *http.Request) {
+	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		http.Error(w, "not a websocket request", http.StatusBadRequest)
+		return
+	}
+
+	// Compute Sec-WebSocket-Accept from the client key
+	key := r.Header.Get("Sec-WebSocket-Key")
+	acceptKey := computeWebSocketAccept(key)
+
+	h := w.(http.Hijacker)
+	conn, buf, err := h.Hijack()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close()
+
+	// Write the 101 response
+	buf.WriteString("HTTP/1.1 101 Switching Protocols\r\n")
+	buf.WriteString("Upgrade: websocket\r\n")
+	buf.WriteString("Connection: Upgrade\r\n")
+	buf.WriteString("Sec-WebSocket-Accept: " + acceptKey + "\r\n")
+	buf.WriteString("\r\n")
+	buf.Flush()
+
+	// Echo loop: read a frame, write it back
+	for {
+		frame, err := readWSFrame(buf.Reader)
+		if err != nil {
+			return
+		}
+		writeWSFrame(conn, frame)
+	}
+}
+
+// computeWebSocketAccept computes the Sec-WebSocket-Accept value per RFC 6455.
+func computeWebSocketAccept(key string) string {
+	const websocketGUID = "258EAFA5-E914-47DA-95CA-5AB5DC76E45B"
+	h := sha1.New()
+	h.Write([]byte(key + websocketGUID))
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
+}
+
+// wsFrame is a minimal WebSocket frame (text only, no masking on server side).
+type wsFrame struct {
+	payload []byte
+}
+
+// readWSFrame reads a single WebSocket frame. Handles client-masked frames.
+func readWSFrame(r io.Reader) (wsFrame, error) {
+	header := make([]byte, 2)
+	if _, err := io.ReadFull(r, header); err != nil {
+		return wsFrame{}, err
+	}
+
+	masked := header[1]&0x80 != 0
+	length := int(header[1] & 0x7F)
+
+	// Only support small frames for testing
+	if length == 126 || length == 127 {
+		return wsFrame{}, io.ErrUnexpectedEOF
+	}
+
+	var maskKey [4]byte
+	if masked {
+		if _, err := io.ReadFull(r, maskKey[:]); err != nil {
+			return wsFrame{}, err
+		}
+	}
+
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(r, payload); err != nil {
+		return wsFrame{}, err
+	}
+
+	if masked {
+		for i := range payload {
+			payload[i] ^= maskKey[i%4]
+		}
+	}
+
+	return wsFrame{payload: payload}, nil
+}
+
+// writeWSFrame writes a single unmasked text frame.
+func writeWSFrame(w io.Writer, f wsFrame) error {
+	header := []byte{0x81, byte(len(f.payload))} // FIN + text opcode, length
+	if _, err := w.Write(header); err != nil {
+		return err
+	}
+	_, err := w.Write(f.payload)
+	return err
+}
+
+// writeMaskedWSFrame writes a single masked text frame (required for client-to-server).
+func writeMaskedWSFrame(w io.Writer, payload []byte) error {
+	maskKey := [4]byte{0x12, 0x34, 0x56, 0x78} // fixed mask for testing
+	masked := make([]byte, len(payload))
+	for i := range payload {
+		masked[i] = payload[i] ^ maskKey[i%4]
+	}
+	header := []byte{0x81, byte(len(payload)) | 0x80} // FIN + text opcode, masked, length
+	if _, err := w.Write(header); err != nil {
+		return err
+	}
+	if _, err := w.Write(maskKey[:]); err != nil {
+		return err
+	}
+	_, err := w.Write(masked)
+	return err
+}
+
+// dialWebSocketViaProxy performs a WebSocket handshake through the proxy.
+// Returns the raw connection for sending/receiving frames.
+func dialWebSocketViaProxy(proxyURL, targetURL string, tlsConfig *tls.Config) (net.Conn, error) {
+	parsed, _ := url.Parse(targetURL)
+	proxyParsed, _ := url.Parse(proxyURL)
+
+	var conn net.Conn
+	var err error
+
+	if parsed.Scheme == "wss" {
+		// For wss://, first CONNECT to establish the tunnel
+		conn, err = net.Dial("tcp", proxyParsed.Host)
+		if err != nil {
+			return nil, fmt.Errorf("dial proxy: %w", err)
+		}
+
+		// Send CONNECT
+		host := parsed.Host
+		if !strings.Contains(host, ":") {
+			host += ":443"
+		}
+		fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", host, host)
+
+		// Read CONNECT response
+		br := bufio.NewReader(conn)
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("CONNECT response: %w", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			conn.Close()
+			return nil, fmt.Errorf("CONNECT status: %d", resp.StatusCode)
+		}
+
+		// TLS handshake over the tunnel
+		tlsConn := tls.Client(conn, tlsConfig)
+		if err := tlsConn.Handshake(); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("TLS handshake: %w", err)
+		}
+		conn = tlsConn
+	} else {
+		// For ws://, connect to the proxy directly
+		conn, err = net.Dial("tcp", proxyParsed.Host)
+		if err != nil {
+			return nil, fmt.Errorf("dial proxy: %w", err)
+		}
+	}
+
+	// Send WebSocket upgrade request. Over a CONNECT tunnel (wss://), use
+	// only the path since the TLS connection is already to the right host.
+	// Over plain HTTP proxy (ws://), use the full URL per HTTP proxy spec.
+	requestURI := targetURL
+	if parsed.Scheme == "wss" {
+		requestURI = parsed.RequestURI()
+	}
+	wsKey := base64.StdEncoding.EncodeToString([]byte("test-websocket-key!"))
+	reqStr := fmt.Sprintf(
+		"GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n",
+		requestURI, parsed.Host, wsKey,
+	)
+	if _, err := conn.Write([]byte(reqStr)); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("write upgrade: %w", err)
+	}
+
+	// Read the 101 response
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("read upgrade response: %w", err)
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		conn.Close()
+		return nil, fmt.Errorf("expected 101, got %d", resp.StatusCode)
+	}
+
+	return conn, nil
+}
+
+func TestWebSocketHTTP(t *testing.T) {
+	env := startTestEnv(t, http.HandlerFunc(wsEchoHandler), nil)
+
+	conn, err := dialWebSocketViaProxy(env.proxyURL, env.httpURL+"/ws", nil)
+	if err != nil {
+		t.Fatalf("WebSocket dial: %v", err)
+	}
+	defer conn.Close()
+
+	// Send a message
+	msg := []byte("hello websocket")
+	if err := writeMaskedWSFrame(conn, msg); err != nil {
+		t.Fatalf("write frame: %v", err)
+	}
+
+	// Read echo
+	frame, err := readWSFrame(conn)
+	if err != nil {
+		t.Fatalf("read frame: %v", err)
+	}
+
+	if string(frame.payload) != "hello websocket" {
+		t.Errorf("echo = %q, want %q", frame.payload, "hello websocket")
+	}
+}
+
+func TestWebSocketHTTPS(t *testing.T) {
+	env := startTestEnv(t, http.HandlerFunc(wsEchoHandler), nil)
+
+	host, _, _ := net.SplitHostPort(env.httpsHost())
+	tlsConfig := &tls.Config{RootCAs: env.caPool, ServerName: host}
+	conn, err := dialWebSocketViaProxy(env.proxyURL, "wss://"+env.httpsHost()+"/ws", tlsConfig)
+	if err != nil {
+		t.Fatalf("WebSocket dial: %v", err)
+	}
+	defer conn.Close()
+
+	msg := []byte("hello secure websocket")
+	if err := writeMaskedWSFrame(conn, msg); err != nil {
+		t.Fatalf("write frame: %v", err)
+	}
+
+	frame, err := readWSFrame(conn)
+	if err != nil {
+		t.Fatalf("read frame: %v", err)
+	}
+
+	if string(frame.payload) != "hello secure websocket" {
+		t.Errorf("echo = %q, want %q", frame.payload, "hello secure websocket")
 	}
 }
