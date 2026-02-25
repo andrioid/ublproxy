@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/tls"
 	"net/http"
 
 	"ublproxy/pkg/blocklist"
@@ -19,12 +18,7 @@ func newProxyHandler(certs *certCache, caCertPEM []byte, rules *blocklist.RuleSe
 		certs:     certs,
 		caCertPEM: caCertPEM,
 		rules:     rules,
-		transport: &http.Transport{
-			// Skip verification when connecting to upstream servers since
-			// we are acting as a proxy, not validating end-server identity
-			// for the user. The user's trust is in our CA certificate.
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
+		transport: &http.Transport{},
 	}
 }
 

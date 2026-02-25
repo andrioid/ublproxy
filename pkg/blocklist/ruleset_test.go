@@ -270,3 +270,53 @@ func TestRuleSetLoadFileWithExceptions(t *testing.T) {
 		})
 	}
 }
+
+func TestMatchCaseViaShouldBlock(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddRule("/BannerAd.gif$match-case")
+
+	// Exact case should be blocked
+	if !rs.ShouldBlock("http://example.com/BannerAd.gif") {
+		t.Error("$match-case rule should block exact case via ShouldBlock")
+	}
+
+	// Wrong case should not be blocked
+	if rs.ShouldBlock("http://example.com/bannerad.gif") {
+		t.Error("$match-case rule should not block wrong case via ShouldBlock")
+	}
+}
+
+func TestHostnameRuleWithOptionsNotFastPathed(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.example.com^$third-party")
+
+	// Same-origin request: $third-party means only block cross-origin.
+	// The hostname fast-path would ignore the option and block everything.
+	ctx := blocklist.MatchContext{PageDomain: "ads.example.com"}
+	if rs.ShouldBlockRequest("http://ads.example.com/page.html", ctx) {
+		t.Error("||hostname^$third-party should NOT block same-origin requests")
+	}
+
+	// Cross-origin request: should be blocked
+	ctx = blocklist.MatchContext{PageDomain: "other.com"}
+	if !rs.ShouldBlockRequest("http://ads.example.com/page.html", ctx) {
+		t.Error("||hostname^$third-party should block cross-origin requests")
+	}
+}
+
+func TestHostnameRuleWithDomainOption(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||tracker.example.com^$domain=news.com")
+
+	// Should only block when page domain is news.com
+	ctx := blocklist.MatchContext{PageDomain: "news.com"}
+	if !rs.ShouldBlockRequest("http://tracker.example.com/pixel.gif", ctx) {
+		t.Error("should block when page domain matches $domain option")
+	}
+
+	// Should not block when page domain is different
+	ctx = blocklist.MatchContext{PageDomain: "other.com"}
+	if rs.ShouldBlockRequest("http://tracker.example.com/pixel.gif", ctx) {
+		t.Error("should not block when page domain doesn't match $domain option")
+	}
+}

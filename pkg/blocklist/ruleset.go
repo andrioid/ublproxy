@@ -124,14 +124,19 @@ func (rs *RuleSet) AddLine(line string) {
 
 	// Strip options for hostname extraction checks (Compile handles options itself)
 	rawPattern := line
-	if idx := strings.IndexByte(rawPattern, '$'); idx >= 0 {
-		rawPattern = rawPattern[:idx]
+	hasOptions := strings.IndexByte(rawPattern, '$') >= 0
+	if hasOptions {
+		rawPattern = rawPattern[:strings.IndexByte(rawPattern, '$')]
 	}
 
-	// Try to extract a hostname-only rule for the fast path
-	if host, ok := extractHostnameRule(rawPattern); ok {
-		rs.AddHostname(host)
-		return
+	// Try to extract a hostname-only rule for the fast path.
+	// Rules with $options (e.g. $third-party, $domain) must go through Compile
+	// so the options are evaluated at match time.
+	if !hasOptions {
+		if host, ok := extractHostnameRule(rawPattern); ok {
+			rs.AddHostname(host)
+			return
+		}
 	}
 
 	// Hosts-file format: "0.0.0.0 hostname" or "127.0.0.1 hostname"
@@ -206,13 +211,13 @@ func (rs *RuleSet) ShouldBlockRequest(rawURL string, ctx MatchContext) bool {
 
 	// Check domain-indexed rules by walking up the hostname hierarchy
 	if !blocked {
-		blocked = rs.matchDomainIndexed(rs.domainRules, host, lowerURL, lowerCtx)
+		blocked = rs.matchDomainIndexed(rs.domainRules, host, rawURL, lowerURL, lowerCtx)
 	}
 
 	// Fall through to generic rules (non-domain-anchored)
 	if !blocked {
 		for _, rule := range rs.rules {
-			if rule.matchWithContextLower(lowerURL, lowerCtx) {
+			if rule.matchWithContextLower(rawURL, lowerURL, lowerCtx) {
 				blocked = true
 				break
 			}
@@ -224,13 +229,13 @@ func (rs *RuleSet) ShouldBlockRequest(rawURL string, ctx MatchContext) bool {
 	}
 
 	// Check domain-indexed exceptions
-	if rs.matchDomainIndexed(rs.domainExc, host, lowerURL, lowerCtx) {
+	if rs.matchDomainIndexed(rs.domainExc, host, rawURL, lowerURL, lowerCtx) {
 		return false
 	}
 
 	// Check generic exceptions
 	for _, exc := range rs.exceptions {
-		if exc.matchWithContextLower(lowerURL, lowerCtx) {
+		if exc.matchWithContextLower(rawURL, lowerURL, lowerCtx) {
 			return false
 		}
 	}
@@ -240,11 +245,11 @@ func (rs *RuleSet) ShouldBlockRequest(rawURL string, ctx MatchContext) bool {
 
 // matchDomainIndexed walks up the hostname hierarchy and checks rules in the
 // domain-indexed map. Returns true if any rule matches the URL.
-func (rs *RuleSet) matchDomainIndexed(index map[string][]*Rule, host, lowerURL string, ctx MatchContext) bool {
+func (rs *RuleSet) matchDomainIndexed(index map[string][]*Rule, host, rawURL, lowerURL string, ctx MatchContext) bool {
 	h := host
 	for {
 		for _, rule := range index[h] {
-			if rule.matchWithContextLower(lowerURL, ctx) {
+			if rule.matchWithContextLower(rawURL, lowerURL, ctx) {
 				return true
 			}
 		}

@@ -78,6 +78,7 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port string) 
 		// checked at CONNECT time; this catches path-specific rules)
 		ctx := matchContextFromReferer(req.Header.Get("Referer"))
 		if p.rules.ShouldBlockRequest(targetURL, ctx) {
+			req.Body.Close()
 			blocked := &http.Response{
 				StatusCode: http.StatusNoContent,
 				ProtoMajor: 1,
@@ -107,12 +108,14 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port string) 
 			return
 		}
 
-		// Inject element hiding CSS into HTML responses
-		if modified, ok := p.injectElementHidingCSS(resp, host); ok {
-			resp.Body.Close()
-			resp.Body = io.NopCloser(bytes.NewReader(modified))
-			resp.ContentLength = int64(len(modified))
-			resp.Header.Del("Content-Length")
+		// Inject element hiding CSS into HTML responses (skip HEAD — no body to modify)
+		if req.Method != http.MethodHead {
+			if modified, ok := p.injectElementHidingCSS(resp, host); ok {
+				resp.Body.Close()
+				resp.Body = io.NopCloser(bytes.NewReader(modified))
+				resp.ContentLength = int64(len(modified))
+				resp.Header.Del("Content-Length")
+			}
 		}
 
 		if err := resp.Write(clientTLS); err != nil {

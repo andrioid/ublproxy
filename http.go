@@ -55,19 +55,23 @@ func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// Inject element hiding CSS into HTML responses
-	if modified, ok := p.injectElementHidingCSS(resp, r.URL.Hostname()); ok {
-		copyHeaders(w.Header(), resp.Header)
-		removeHopByHopHeaders(w.Header())
-		w.Header().Del("Content-Length")
-		w.WriteHeader(resp.StatusCode)
-		w.Write(modified)
-	} else {
-		copyHeaders(w.Header(), resp.Header)
-		removeHopByHopHeaders(w.Header())
-		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, resp.Body)
+	// Inject element hiding CSS into HTML responses (skip HEAD — no body to modify)
+	if r.Method != http.MethodHead {
+		if modified, ok := p.injectElementHidingCSS(resp, r.URL.Hostname()); ok {
+			copyHeaders(w.Header(), resp.Header)
+			removeHopByHopHeaders(w.Header())
+			w.Header().Del("Content-Length")
+			w.WriteHeader(resp.StatusCode)
+			w.Write(modified)
+			logRequest(r.Method, r.URL.String(), resp.StatusCode, time.Since(start))
+			return
+		}
 	}
+
+	copyHeaders(w.Header(), resp.Header)
+	removeHopByHopHeaders(w.Header())
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 
 	logRequest(r.Method, r.URL.String(), resp.StatusCode, time.Since(start))
 }

@@ -235,15 +235,17 @@ func (r *Rule) MatchWithContext(rawURL string, ctx MatchContext) bool {
 }
 
 // matchWithContextLower matches using a pre-lowercased URL to avoid redundant
-// ToLower calls when checking many rules against the same URL.
-func (r *Rule) matchWithContextLower(lowerURL string, ctx MatchContext) bool {
-	url := lowerURL
+// ToLower calls when checking many rules against the same URL. The rawURL is
+// needed for $match-case rules which must compare against the original case.
+func (r *Rule) matchWithContextLower(rawURL, lowerURL string, ctx MatchContext) bool {
 	if r.options.MatchCase {
-		// match-case rules need the original URL, but we only have the lowered
-		// version — fall back to re-checking. This is rare in practice.
-		return false
+		// $match-case needs the original-case URL
+		if !r.matchURL(rawURL) {
+			return false
+		}
+		return r.checkOptionsLower(lowerURL, ctx)
 	}
-	if !r.matchURL(url) {
+	if !r.matchURL(lowerURL) {
 		return false
 	}
 	return r.checkOptionsLower(lowerURL, ctx)

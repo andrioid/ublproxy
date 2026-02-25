@@ -43,6 +43,14 @@ func startTestEnv(t *testing.T, upstreamHandler http.Handler, rules *blocklist.R
 	caCertPEM := encodeCertPEM(caCert)
 	handler := newProxyHandler(certs, caCertPEM, rules)
 
+	// Trust the test HTTPS server's certificate so the proxy can validate
+	// upstream TLS connections (proxy validates upstream certs in production)
+	upstreamCAPool := x509.NewCertPool()
+	upstreamCAPool.AddCert(httpsServer.Certificate())
+	handler.transport.TLSClientConfig = &tls.Config{
+		RootCAs: upstreamCAPool,
+	}
+
 	// The proxy needs a real http.Server (not httptest) so that Hijack works
 	// on the ResponseWriter. httptest.NewServer wraps net/http.Server, which
 	// does support Hijack, so this is fine.
@@ -770,5 +778,37 @@ func TestElementHidingHTTPS(t *testing.T) {
 	}
 	if !strings.Contains(bodyStr, ".ad-banner") {
 		t.Errorf("HTTPS response should contain .ad-banner selector, got:\n%s", bodyStr)
+	}
+}
+
+func TestHeadRequestNoInjection(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("##.ad-banner")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Length", "44")
+		w.WriteHeader(http.StatusOK)
+		// HEAD responses have no body per HTTP spec
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Head(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("HEAD: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	// HEAD responses must have no body, even when element hiding rules exist
+	if len(body) != 0 {
+		t.Errorf("HEAD response should have empty body, got %d bytes: %q", len(body), body)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 }
