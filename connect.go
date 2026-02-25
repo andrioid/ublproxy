@@ -16,7 +16,7 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 		host = r.Host
 		port = "443"
 	}
-	if p.blocklist.IsBlocked(host) {
+	if p.rules.IsHostBlocked(host) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -71,8 +71,22 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port string) 
 			return
 		}
 
-		start := time.Now()
 		targetURL := "https://" + host + req.URL.String()
+
+		// URL-level blocking for pattern rules (hostname was already
+		// checked at CONNECT time; this catches path-specific rules)
+		if p.rules.ShouldBlock(targetURL) {
+			blocked := &http.Response{
+				StatusCode: http.StatusNoContent,
+				ProtoMajor: 1,
+				ProtoMinor: 1,
+				Header:     make(http.Header),
+			}
+			blocked.Write(clientTLS)
+			continue
+		}
+
+		start := time.Now()
 		req.URL.Scheme = "https"
 		req.URL.Host = net.JoinHostPort(host, port)
 		req.RequestURI = ""

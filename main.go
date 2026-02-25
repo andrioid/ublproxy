@@ -39,21 +39,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	var bl *blocklist.Blocklist
+	var rules *blocklist.RuleSet
 	if len(blocklistPaths) > 0 {
-		bl = blocklist.New()
+		rules = blocklist.NewRuleSet()
 		for _, path := range blocklistPaths {
-			if err := bl.LoadFile(path); err != nil {
+			if err := rules.LoadFile(path); err != nil {
 				fmt.Fprintf(os.Stderr, "failed to load blocklist: %v\n", err)
 				os.Exit(1)
 			}
 		}
-		fmt.Fprintf(os.Stderr, "Loaded %d blocked hostnames\n", bl.Len())
+		fmt.Fprintf(os.Stderr, "Loaded %d blocked hostnames, %d URL rules\n", rules.HostCount(), rules.RuleCount())
 	}
 
 	certs := newCertCache(caCert, caKey)
 	caCertPEM := encodeCertPEM(caCert)
-	handler := newProxyHandler(certs, caCertPEM, bl)
+	handler := newProxyHandler(certs, caCertPEM, rules)
 
 	listenAddr := fmt.Sprintf("%s:%d", *addr, *port)
 	fmt.Fprintf(os.Stderr, "ublproxy listening on http://%s\n", listenAddr)

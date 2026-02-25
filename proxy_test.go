@@ -25,8 +25,8 @@ type testEnv struct {
 
 // startTestEnv spins up an upstream HTTP server, an upstream HTTPS server, and
 // the proxy itself. The CA is generated in-memory — no disk I/O.
-// Pass nil for bl to create a proxy without blocking.
-func startTestEnv(t *testing.T, upstreamHandler http.Handler, bl *blocklist.Blocklist) *testEnv {
+// Pass nil for rules to create a proxy without blocking.
+func startTestEnv(t *testing.T, upstreamHandler http.Handler, rules *blocklist.RuleSet) *testEnv {
 	t.Helper()
 
 	// Upstream servers
@@ -41,7 +41,7 @@ func startTestEnv(t *testing.T, upstreamHandler http.Handler, bl *blocklist.Bloc
 
 	certs := newCertCache(caCert, caKey)
 	caCertPEM := encodeCertPEM(caCert)
-	handler := newProxyHandler(certs, caCertPEM, bl)
+	handler := newProxyHandler(certs, caCertPEM, rules)
 
 	// The proxy needs a real http.Server (not httptest) so that Hijack works
 	// on the ResponseWriter. httptest.NewServer wraps net/http.Server, which
@@ -349,14 +349,14 @@ func TestHTTPSProxyPOST(t *testing.T) {
 func TestBlocksHTTPByHostname(t *testing.T) {
 	var upstreamHit atomic.Bool
 
-	bl := blocklist.New()
-	bl.Add("127.0.0.1")
+	rs := blocklist.NewRuleSet()
+	rs.AddHostname("127.0.0.1")
 
 	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamHit.Store(true)
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("should not see this"))
-	}), bl)
+	}), rs)
 
 	client := env.httpClient(t)
 	resp, err := client.Get(env.httpURL + "/tracking.js")
@@ -382,14 +382,14 @@ func TestBlocksHTTPByHostname(t *testing.T) {
 func TestBlocksHTTPSByHostname(t *testing.T) {
 	var upstreamHit atomic.Bool
 
-	bl := blocklist.New()
-	bl.Add("127.0.0.1")
+	rs := blocklist.NewRuleSet()
+	rs.AddHostname("127.0.0.1")
 
 	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamHit.Store(true)
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("should not see this"))
-	}), bl)
+	}), rs)
 
 	client := env.httpClient(t)
 
@@ -402,5 +402,98 @@ func TestBlocksHTTPSByHostname(t *testing.T) {
 
 	if upstreamHit.Load() {
 		t.Error("upstream was hit, but request should have been blocked")
+	}
+}
+
+func TestBlocksHTTPByURLPattern(t *testing.T) {
+	var lastPath string
+
+	rs := blocklist.NewRuleSet()
+	rs.AddRule("/ads/banner*.gif")
+
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("upstream response"))
+	}), rs)
+
+	client := env.httpClient(t)
+
+	// Matching URL pattern should be blocked
+	resp, err := client.Get(env.httpURL + "/ads/banner123.gif")
+	if err != nil {
+		t.Fatalf("GET blocked URL: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("blocked status = %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+
+	// Non-matching URL should pass through
+	resp, err = client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET allowed URL: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("allowed status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "upstream response" {
+		t.Errorf("body = %q, want %q", body, "upstream response")
+	}
+
+	if lastPath != "/page.html" {
+		t.Errorf("upstream saw path = %q, want %q", lastPath, "/page.html")
+	}
+}
+
+func TestBlocksHTTPSByURLPattern(t *testing.T) {
+	var requestPaths []string
+
+	rs := blocklist.NewRuleSet()
+	rs.AddRule("/ads/tracking.js")
+
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPaths = append(requestPaths, r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("upstream response"))
+	}), rs)
+
+	client := env.httpClient(t)
+
+	// Non-matching path should pass through (CONNECT succeeds, MITM proxies request)
+	resp, err := client.Get(env.httpsURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET allowed HTTPS URL: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("allowed status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if string(body) != "upstream response" {
+		t.Errorf("body = %q, want %q", body, "upstream response")
+	}
+
+	// Matching URL pattern should be blocked after MITM (CONNECT succeeds,
+	// but the individual request inside the tunnel is blocked)
+	resp, err = client.Get(env.httpsURL + "/ads/tracking.js")
+	if err != nil {
+		t.Fatalf("GET blocked HTTPS URL: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("blocked status = %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+
+	// Only the allowed request should have reached upstream
+	if len(requestPaths) != 1 || requestPaths[0] != "/page.html" {
+		t.Errorf("upstream saw paths = %v, want [/page.html]", requestPaths)
 	}
 }

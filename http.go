@@ -20,7 +20,7 @@ var hopByHopHeaders = []string{
 }
 
 func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
-	if p.blocklist.IsBlocked(r.URL.Hostname()) {
+	if p.rules.ShouldBlock(r.URL.String()) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

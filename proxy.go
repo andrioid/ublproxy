@@ -10,15 +10,15 @@ import (
 type proxyHandler struct {
 	certs     *certCache
 	caCertPEM []byte
-	blocklist *blocklist.Blocklist
+	rules     *blocklist.RuleSet
 	transport *http.Transport
 }
 
-func newProxyHandler(certs *certCache, caCertPEM []byte, bl *blocklist.Blocklist) *proxyHandler {
+func newProxyHandler(certs *certCache, caCertPEM []byte, rules *blocklist.RuleSet) *proxyHandler {
 	return &proxyHandler{
 		certs:     certs,
 		caCertPEM: caCertPEM,
-		blocklist: bl,
+		rules:     rules,
 		transport: &http.Transport{
 			// Skip verification when connecting to upstream servers since
 			// we are acting as a proxy, not validating end-server identity
