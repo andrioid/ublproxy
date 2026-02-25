@@ -9,9 +9,11 @@ import (
 
 // RuleSet holds blocking rules for URL filtering. It combines a hostname map
 // (fast path for ||hostname^ rules) with compiled URL pattern rules.
+// Exception rules (@@) override blocking rules when they match.
 type RuleSet struct {
-	hosts map[string]struct{}
-	rules []*Rule
+	hosts      map[string]struct{}
+	rules      []*Rule
+	exceptions []*Rule
 }
 
 func NewRuleSet() *RuleSet {
@@ -22,6 +24,19 @@ func NewRuleSet() *RuleSet {
 // Matches the hostname and all its subdomains.
 func (rs *RuleSet) AddHostname(host string) {
 	rs.hosts[strings.ToLower(host)] = struct{}{}
+}
+
+// AddException compiles an adblock exception pattern (with or without @@
+// prefix) and adds it to the exception list. Exception rules override
+// blocking rules when they match a URL.
+func (rs *RuleSet) AddException(pattern string) error {
+	pattern = strings.TrimPrefix(pattern, "@@")
+	rule, err := Compile(pattern)
+	if err != nil {
+		return err
+	}
+	rs.exceptions = append(rs.exceptions, rule)
+	return nil
 }
 
 // AddRule compiles an adblock URL pattern and adds it to the rule list.
@@ -60,8 +75,9 @@ func (rs *RuleSet) addLine(line string) {
 		return
 	}
 
-	// Exception rules (Phase 2)
+	// Exception rules
 	if strings.HasPrefix(line, "@@") {
+		rs.AddException(line)
 		return
 	}
 
@@ -129,28 +145,44 @@ func extractHostnameRule(pattern string) (string, bool) {
 	return host, true
 }
 
-// ShouldBlock returns true if the URL matches any blocking rule.
-// Safe to call on a nil receiver (returns false).
+// ShouldBlock returns true if the URL matches any blocking rule and no
+// exception rule overrides it. Safe to call on a nil receiver (returns false).
 func (rs *RuleSet) ShouldBlock(rawURL string) bool {
 	if rs == nil {
 		return false
 	}
 
+	blocked := false
+
 	// Fast path: check hostname against the hostname map
 	url := strings.ToLower(rawURL)
 	host := extractHostFromURL(url)
 	if rs.isHostBlocked(host) {
-		return true
+		blocked = true
 	}
 
 	// Slow path: check URL against compiled pattern rules
-	for _, rule := range rs.rules {
-		if rule.Match(rawURL) {
-			return true
+	if !blocked {
+		for _, rule := range rs.rules {
+			if rule.Match(rawURL) {
+				blocked = true
+				break
+			}
 		}
 	}
 
-	return false
+	if !blocked {
+		return false
+	}
+
+	// Check if any exception rule allows this URL
+	for _, exc := range rs.exceptions {
+		if exc.Match(rawURL) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // IsHostBlocked returns true if the hostname (or any parent domain) is in

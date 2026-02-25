@@ -497,3 +497,49 @@ func TestBlocksHTTPSByURLPattern(t *testing.T) {
 		t.Errorf("upstream saw paths = %v, want [/page.html]", requestPaths)
 	}
 }
+
+func TestExceptionAllowsBlockedHTTPPath(t *testing.T) {
+	var requestPaths []string
+
+	rs := blocklist.NewRuleSet()
+	rs.AddRule("/ads/*")
+	rs.AddException("@@/ads/approved*")
+
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPaths = append(requestPaths, r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	}), rs)
+
+	client := env.httpClient(t)
+
+	// Blocked by /ads/* rule
+	resp, err := client.Get(env.httpURL + "/ads/tracking.js")
+	if err != nil {
+		t.Fatalf("GET blocked URL: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("blocked status = %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+
+	// Exception allows /ads/approved*
+	resp, err = client.Get(env.httpURL + "/ads/approved-banner.gif")
+	if err != nil {
+		t.Fatalf("GET excepted URL: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("excepted status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if string(body) != "ok" {
+		t.Errorf("excepted body = %q, want %q", body, "ok")
+	}
+
+	// Only the excepted request should have reached upstream
+	if len(requestPaths) != 1 || requestPaths[0] != "/ads/approved-banner.gif" {
+		t.Errorf("upstream saw paths = %v, want [/ads/approved-banner.gif]", requestPaths)
+	}
+}

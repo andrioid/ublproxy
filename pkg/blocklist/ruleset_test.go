@@ -178,3 +178,95 @@ func TestRuleSetConnectBlocking(t *testing.T) {
 		t.Error("IsHostBlocked should return false for non-blocked hostname")
 	}
 }
+
+func TestRuleSetExceptionOverridesBlock(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddHostname("ads.example.com")
+	rs.AddException("@@||ads.example.com/safe-page^")
+
+	// The exception should allow this specific path
+	if rs.ShouldBlock("http://ads.example.com/safe-page") {
+		t.Error("exception should allow /safe-page")
+	}
+
+	// Other paths on the blocked domain should still be blocked
+	if !rs.ShouldBlock("http://ads.example.com/tracking.js") {
+		t.Error("non-excepted path should still be blocked")
+	}
+}
+
+func TestRuleSetExceptionOverridesPatternBlock(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddRule("/ads/*")
+	rs.AddException("@@/ads/acceptable*")
+
+	// Exception allows URLs matching the exception pattern
+	if rs.ShouldBlock("http://example.com/ads/acceptable-banner.gif") {
+		t.Error("exception should allow acceptable ads")
+	}
+
+	// Non-excepted URLs still blocked
+	if !rs.ShouldBlock("http://example.com/ads/tracking.js") {
+		t.Error("non-excepted ads URL should still be blocked")
+	}
+}
+
+func TestRuleSetExceptionHostname(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddHostname("ads.example.com")
+	rs.AddException("@@||ads.example.com^")
+
+	// Full hostname exception should allow everything on that domain
+	if rs.ShouldBlock("http://ads.example.com/anything") {
+		t.Error("hostname exception should allow all paths")
+	}
+	if rs.ShouldBlock("http://ads.example.com/tracking.js") {
+		t.Error("hostname exception should allow all paths")
+	}
+}
+
+func TestRuleSetLoadFileWithExceptions(t *testing.T) {
+	content := `||ads.example.com^
+/tracking.js
+@@||ads.example.com/approved^
+@@/tracking.js?partner=trusted
+`
+	f, err := os.CreateTemp("", "exception-test-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+
+	if _, err := f.WriteString(content); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	rs := blocklist.NewRuleSet()
+	if err := rs.LoadFile(f.Name()); err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+
+	tests := []struct {
+		url  string
+		want bool
+	}{
+		// Blocked by hostname
+		{"http://ads.example.com/banner.gif", true},
+		// Exception allows this specific path
+		{"http://ads.example.com/approved", false},
+		// Blocked by URL pattern
+		{"http://other.com/tracking.js", true},
+		// Exception allows this specific query
+		{"http://other.com/tracking.js?partner=trusted", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			got := rs.ShouldBlock(tt.url)
+			if got != tt.want {
+				t.Errorf("ShouldBlock(%q) = %v, want %v", tt.url, got, tt.want)
+			}
+		})
+	}
+}
