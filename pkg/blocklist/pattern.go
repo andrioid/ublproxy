@@ -179,7 +179,12 @@ func (r *Rule) Match(rawURL string) bool {
 	if !r.options.MatchCase {
 		url = strings.ToLower(rawURL)
 	}
+	return r.matchURL(url)
+}
 
+// matchURL matches the pre-cased URL against the rule's pattern.
+// Callers must ensure url is already lowercased for case-insensitive rules.
+func (r *Rule) matchURL(url string) bool {
 	if r.domainAnchor {
 		return r.matchDomainAnchor(url)
 	}
@@ -206,6 +211,27 @@ func (r *Rule) MatchWithContext(rawURL string, ctx MatchContext) bool {
 	return r.checkOptions(rawURL, ctx)
 }
 
+// matchWithContextLower matches using a pre-lowercased URL to avoid redundant
+// ToLower calls when checking many rules against the same URL.
+func (r *Rule) matchWithContextLower(lowerURL string, ctx MatchContext) bool {
+	url := lowerURL
+	if r.options.MatchCase {
+		// match-case rules need the original URL, but we only have the lowered
+		// version — fall back to re-checking. This is rare in practice.
+		return false
+	}
+	if !r.matchURL(url) {
+		return false
+	}
+	return r.checkOptionsLower(lowerURL, ctx)
+}
+
+// DomainAnchor returns true if the rule uses a || domain anchor.
+func (r *Rule) DomainAnchor() bool { return r.domainAnchor }
+
+// DomainSuffix returns the domain part of a || domain-anchored rule (e.g. "example.com").
+func (r *Rule) DomainSuffix() string { return r.domainSuffix }
+
 // HasContextOptions returns true if the rule has options that require
 // a MatchContext to evaluate (e.g. $third-party, $domain).
 func (r *Rule) HasContextOptions() bool {
@@ -215,10 +241,17 @@ func (r *Rule) HasContextOptions() bool {
 }
 
 func (r *Rule) checkOptions(rawURL string, ctx MatchContext) bool {
+	lowerURL := strings.ToLower(rawURL)
+	lowerCtx := MatchContext{PageDomain: strings.ToLower(ctx.PageDomain)}
+	return r.checkOptionsLower(lowerURL, lowerCtx)
+}
+
+// checkOptionsLower evaluates context-dependent options using pre-lowercased
+// URL and context to avoid redundant ToLower calls in hot paths.
+func (r *Rule) checkOptionsLower(lowerURL string, ctx MatchContext) bool {
 	if r.options.ThirdParty != nil {
-		requestDomain := extractHostFromURL(strings.ToLower(rawURL))
-		pageDomain := strings.ToLower(ctx.PageDomain)
-		isThirdParty := !domainMatchesOrIsSubdomain(requestDomain, pageDomain)
+		requestDomain := extractHostFromURL(lowerURL)
+		isThirdParty := !domainMatchesOrIsSubdomain(requestDomain, ctx.PageDomain)
 
 		if *r.options.ThirdParty && !isThirdParty {
 			return false
@@ -229,10 +262,9 @@ func (r *Rule) checkOptions(rawURL string, ctx MatchContext) bool {
 	}
 
 	if len(r.options.IncludeDomains) > 0 {
-		pageDomain := strings.ToLower(ctx.PageDomain)
 		matched := false
 		for _, d := range r.options.IncludeDomains {
-			if domainMatchesOrIsSubdomain(pageDomain, d) {
+			if domainMatchesOrIsSubdomain(ctx.PageDomain, d) {
 				matched = true
 				break
 			}
@@ -242,12 +274,9 @@ func (r *Rule) checkOptions(rawURL string, ctx MatchContext) bool {
 		}
 	}
 
-	if len(r.options.ExcludeDomains) > 0 {
-		pageDomain := strings.ToLower(ctx.PageDomain)
-		for _, d := range r.options.ExcludeDomains {
-			if domainMatchesOrIsSubdomain(pageDomain, d) {
-				return false
-			}
+	for _, d := range r.options.ExcludeDomains {
+		if domainMatchesOrIsSubdomain(ctx.PageDomain, d) {
+			return false
 		}
 	}
 

@@ -13,8 +13,10 @@ import (
 // Element hiding rules (##) provide CSS selectors to hide page elements.
 type RuleSet struct {
 	hosts         map[string]struct{}
-	rules         []*Rule
-	exceptions    []*Rule
+	rules         []*Rule            // generic rules (no domain anchor)
+	domainRules   map[string][]*Rule // domain-anchored rules keyed by domain suffix
+	exceptions    []*Rule            // generic exceptions
+	domainExc     map[string][]*Rule // domain-anchored exceptions keyed by domain suffix
 	elemHideRules []*ElementHideRule
 	elemHideIdx   *elemHideIndex
 }
@@ -22,6 +24,8 @@ type RuleSet struct {
 func NewRuleSet() *RuleSet {
 	return &RuleSet{
 		hosts:       make(map[string]struct{}),
+		domainRules: make(map[string][]*Rule),
+		domainExc:   make(map[string][]*Rule),
 		elemHideIdx: newElemHideIndex(),
 	}
 }
@@ -33,26 +37,37 @@ func (rs *RuleSet) AddHostname(host string) {
 }
 
 // AddException compiles an adblock exception pattern (with or without @@
-// prefix) and adds it to the exception list. Exception rules override
-// blocking rules when they match a URL.
+// prefix) and adds it to the exception list. Domain-anchored exceptions are
+// indexed by domain suffix for fast lookup; all others go into the generic list.
 func (rs *RuleSet) AddException(pattern string) error {
 	pattern = strings.TrimPrefix(pattern, "@@")
 	rule, err := Compile(pattern)
 	if err != nil {
 		return err
 	}
-	rs.exceptions = append(rs.exceptions, rule)
+	if rule.DomainAnchor() && rule.DomainSuffix() != "" {
+		key := rule.DomainSuffix()
+		rs.domainExc[key] = append(rs.domainExc[key], rule)
+	} else {
+		rs.exceptions = append(rs.exceptions, rule)
+	}
 	return nil
 }
 
 // AddRule compiles an adblock URL pattern and adds it to the rule list.
-// Returns an error if the pattern is invalid.
+// Domain-anchored rules (||domain...) are indexed by domain suffix for fast
+// lookup; all other rules go into the generic list.
 func (rs *RuleSet) AddRule(pattern string) error {
 	rule, err := Compile(pattern)
 	if err != nil {
 		return err
 	}
-	rs.rules = append(rs.rules, rule)
+	if rule.DomainAnchor() && rule.DomainSuffix() != "" {
+		key := rule.DomainSuffix()
+		rs.domainRules[key] = append(rs.domainRules[key], rule)
+	} else {
+		rs.rules = append(rs.rules, rule)
+	}
 	return nil
 }
 
@@ -107,7 +122,7 @@ func (rs *RuleSet) AddLine(line string) {
 		return
 	}
 
-	// Strip options after $ for now (Phase 3 will handle them)
+	// Strip options for hostname extraction checks (Compile handles options itself)
 	rawPattern := line
 	if idx := strings.IndexByte(rawPattern, '$'); idx >= 0 {
 		rawPattern = rawPattern[:idx]
@@ -130,12 +145,8 @@ func (rs *RuleSet) AddLine(line string) {
 		return
 	}
 
-	// Compile as a URL pattern rule
-	rule, err := Compile(rawPattern)
-	if err != nil {
-		return // skip invalid patterns silently
-	}
-	rs.rules = append(rs.rules, rule)
+	// Compile as a URL pattern rule (routed to domain index or generic list)
+	rs.AddRule(line)
 }
 
 // extractHostnameRule checks if the pattern is a hostname-only rule
@@ -181,19 +192,27 @@ func (rs *RuleSet) ShouldBlockRequest(rawURL string, ctx MatchContext) bool {
 		return false
 	}
 
+	// Pre-lowercase once to avoid redundant ToLower in each rule match
+	lowerURL := strings.ToLower(rawURL)
+	lowerCtx := MatchContext{PageDomain: strings.ToLower(ctx.PageDomain)}
+	host := extractHostFromURL(lowerURL)
+
 	blocked := false
 
 	// Fast path: check hostname against the hostname map
-	url := strings.ToLower(rawURL)
-	host := extractHostFromURL(url)
 	if rs.isHostBlocked(host) {
 		blocked = true
 	}
 
-	// Slow path: check URL against compiled pattern rules
+	// Check domain-indexed rules by walking up the hostname hierarchy
+	if !blocked {
+		blocked = rs.matchDomainIndexed(rs.domainRules, host, lowerURL, lowerCtx)
+	}
+
+	// Fall through to generic rules (non-domain-anchored)
 	if !blocked {
 		for _, rule := range rs.rules {
-			if rule.MatchWithContext(rawURL, ctx) {
+			if rule.matchWithContextLower(lowerURL, lowerCtx) {
 				blocked = true
 				break
 			}
@@ -204,14 +223,37 @@ func (rs *RuleSet) ShouldBlockRequest(rawURL string, ctx MatchContext) bool {
 		return false
 	}
 
-	// Check if any exception rule allows this URL
+	// Check domain-indexed exceptions
+	if rs.matchDomainIndexed(rs.domainExc, host, lowerURL, lowerCtx) {
+		return false
+	}
+
+	// Check generic exceptions
 	for _, exc := range rs.exceptions {
-		if exc.MatchWithContext(rawURL, ctx) {
+		if exc.matchWithContextLower(lowerURL, lowerCtx) {
 			return false
 		}
 	}
 
 	return true
+}
+
+// matchDomainIndexed walks up the hostname hierarchy and checks rules in the
+// domain-indexed map. Returns true if any rule matches the URL.
+func (rs *RuleSet) matchDomainIndexed(index map[string][]*Rule, host, lowerURL string, ctx MatchContext) bool {
+	h := host
+	for {
+		for _, rule := range index[h] {
+			if rule.matchWithContextLower(lowerURL, ctx) {
+				return true
+			}
+		}
+		dot := strings.IndexByte(h, '.')
+		if dot < 0 {
+			return false
+		}
+		h = h[dot+1:]
+	}
 }
 
 // IsHostBlocked returns true if the hostname (or any parent domain) is in
@@ -264,10 +306,15 @@ func (rs *RuleSet) HostCount() int {
 	return len(rs.hosts)
 }
 
-// RuleCount returns the number of compiled URL pattern rules.
+// RuleCount returns the number of compiled URL pattern rules
+// (both domain-indexed and generic).
 func (rs *RuleSet) RuleCount() int {
 	if rs == nil {
 		return 0
 	}
-	return len(rs.rules)
+	n := len(rs.rules)
+	for _, rules := range rs.domainRules {
+		n += len(rules)
+	}
+	return n
 }
