@@ -9,7 +9,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
+
+	"ublproxy/pkg/blocklist"
 )
 
 // testEnv holds everything needed to run a proxy e2e test.
@@ -22,7 +25,8 @@ type testEnv struct {
 
 // startTestEnv spins up an upstream HTTP server, an upstream HTTPS server, and
 // the proxy itself. The CA is generated in-memory — no disk I/O.
-func startTestEnv(t *testing.T, upstreamHandler http.Handler) *testEnv {
+// Pass nil for bl to create a proxy without blocking.
+func startTestEnv(t *testing.T, upstreamHandler http.Handler, bl *blocklist.Blocklist) *testEnv {
 	t.Helper()
 
 	// Upstream servers
@@ -37,7 +41,7 @@ func startTestEnv(t *testing.T, upstreamHandler http.Handler) *testEnv {
 
 	certs := newCertCache(caCert, caKey)
 	caCertPEM := encodeCertPEM(caCert)
-	handler := newProxyHandler(certs, caCertPEM)
+	handler := newProxyHandler(certs, caCertPEM, bl)
 
 	// The proxy needs a real http.Server (not httptest) so that Hijack works
 	// on the ResponseWriter. httptest.NewServer wraps net/http.Server, which
@@ -87,7 +91,7 @@ func TestHTTPProxy(t *testing.T) {
 	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("hello from upstream"))
-	}))
+	}), nil)
 
 	client := env.httpClient(t)
 	resp, err := client.Get(env.httpURL + "/test")
@@ -113,7 +117,7 @@ func TestHTTPProxyHeaders(t *testing.T) {
 		receivedHeaders = r.Header.Clone()
 		w.Header().Set("X-Upstream-Header", "present")
 		w.WriteHeader(http.StatusOK)
-	}))
+	}), nil)
 
 	client := env.httpClient(t)
 
@@ -150,7 +154,7 @@ func TestHTTPSProxy(t *testing.T) {
 	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("hello from tls upstream"))
-	}))
+	}), nil)
 
 	client := env.httpClient(t)
 	resp, err := client.Get(env.httpsURL + "/secure")
@@ -176,7 +180,7 @@ func TestHTTPSProxyHeaders(t *testing.T) {
 		receivedHeaders = r.Header.Clone()
 		w.Header().Set("X-Upstream-Secure", "yes")
 		w.WriteHeader(http.StatusOK)
-	}))
+	}), nil)
 
 	client := env.httpClient(t)
 
@@ -209,7 +213,7 @@ func TestHTTPProxyPOST(t *testing.T) {
 		receivedBody = string(body)
 		w.WriteHeader(http.StatusCreated)
 		w.Write([]byte("created"))
-	}))
+	}), nil)
 
 	client := env.httpClient(t)
 	resp, err := client.Post(env.httpURL+"/create", "text/plain", strings.NewReader("request body"))
@@ -235,7 +239,7 @@ func TestHTTPProxyPOST(t *testing.T) {
 func TestPortalPage(t *testing.T) {
 	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	}))
+	}), nil)
 
 	// Direct request to the proxy (not through it as a proxy)
 	resp, err := http.Get(env.proxyURL + "/")
@@ -266,7 +270,7 @@ func TestPortalPage(t *testing.T) {
 func TestPortalCACertDownload(t *testing.T) {
 	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	}))
+	}), nil)
 
 	// Direct request to download the CA cert
 	resp, err := http.Get(env.proxyURL + "/ca.crt")
@@ -319,7 +323,7 @@ func TestHTTPSProxyPOST(t *testing.T) {
 		receivedBody = string(body)
 		w.WriteHeader(http.StatusCreated)
 		w.Write([]byte("created securely"))
-	}))
+	}), nil)
 
 	client := env.httpClient(t)
 	resp, err := client.Post(env.httpsURL+"/secure-create", "text/plain", strings.NewReader("secure body"))
@@ -339,5 +343,64 @@ func TestHTTPSProxyPOST(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if string(body) != "created securely" {
 		t.Errorf("response body = %q, want %q", body, "created securely")
+	}
+}
+
+func TestBlocksHTTPByHostname(t *testing.T) {
+	var upstreamHit atomic.Bool
+
+	bl := blocklist.New()
+	bl.Add("127.0.0.1")
+
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHit.Store(true)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("should not see this"))
+	}), bl)
+
+	client := env.httpClient(t)
+	resp, err := client.Get(env.httpURL + "/tracking.js")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if len(body) != 0 {
+		t.Errorf("body = %q, want empty (blocked)", body)
+	}
+
+	if upstreamHit.Load() {
+		t.Error("upstream was hit, but request should have been blocked")
+	}
+}
+
+func TestBlocksHTTPSByHostname(t *testing.T) {
+	var upstreamHit atomic.Bool
+
+	bl := blocklist.New()
+	bl.Add("127.0.0.1")
+
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHit.Store(true)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("should not see this"))
+	}), bl)
+
+	client := env.httpClient(t)
+
+	// HTTPS request to a blocked host — the CONNECT tunnel should be blocked
+	// before any TLS handshake occurs, so the client will get an error.
+	_, err := client.Get(env.httpsURL + "/secure-tracking.js")
+	if err == nil {
+		t.Error("expected error for blocked HTTPS host, got nil")
+	}
+
+	if upstreamHit.Load() {
+		t.Error("upstream was hit, but request should have been blocked")
 	}
 }

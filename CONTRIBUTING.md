@@ -50,6 +50,7 @@ mise run dev
 | `--addr` | `127.0.0.1` | Address to listen on |
 | `--port` | `8080` | Port to listen on |
 | `--ca-dir` | `~/.ublproxy/` | Directory for CA certificate and key |
+| `--blocklist` | *(none)* | Path to a blocklist file (can be specified multiple times) |
 
 On first run, a CA certificate and key are generated in the `--ca-dir` directory. You need to trust the CA certificate (`ca.crt`) in your OS or browser for HTTPS interception to work without warnings.
 
@@ -83,7 +84,7 @@ Tests are fully self-contained — they spin up in-memory CA certificates, local
 
 ## Project structure
 
-All code lives in `package main` in the project root. Files are split by responsibility:
+Proxy code lives in `package main` in the project root. The `pkg/` directory contains reusable packages.
 
 | File | Responsibility |
 |---|---|
@@ -96,6 +97,7 @@ All code lives in `package main` in the project root. Files are split by respons
 | `portal.go` | Direct-access page with CA cert download and install instructions |
 | `log.go` | Request and error logging to stderr |
 | `proxy_test.go` | End-to-end tests for both HTTP and HTTPS proxy flows |
+| `pkg/blocklist/` | Blocklist parsing (adblock + hosts-file) and hostname matching |
 | `scripts/build` | Build task |
 | `scripts/test` | Test task |
 | `scripts/dev` | Build + run task for development |

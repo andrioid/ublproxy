@@ -3,18 +3,22 @@ package main
 import (
 	"crypto/tls"
 	"net/http"
+
+	"ublproxy/pkg/blocklist"
 )
 
 type proxyHandler struct {
 	certs     *certCache
 	caCertPEM []byte
+	blocklist *blocklist.Blocklist
 	transport *http.Transport
 }
 
-func newProxyHandler(certs *certCache, caCertPEM []byte) *proxyHandler {
+func newProxyHandler(certs *certCache, caCertPEM []byte, bl *blocklist.Blocklist) *proxyHandler {
 	return &proxyHandler{
 		certs:     certs,
 		caCertPEM: caCertPEM,
+		blocklist: bl,
 		transport: &http.Transport{
 			// Skip verification when connecting to upstream servers since
 			// we are acting as a proxy, not validating end-server identity

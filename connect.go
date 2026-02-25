@@ -16,6 +16,10 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 		host = r.Host
 		port = "443"
 	}
+	if p.blocklist.IsBlocked(host) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
