@@ -6,12 +6,14 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/andybalholm/brotli"
 )
 
 // injectElementHidingCSS checks if the response is HTML and injects element
 // hiding CSS if applicable. Returns the (possibly modified) body and true if
 // the response was modified, or the original body and false otherwise.
-// Handles gzip-compressed responses transparently.
+// Handles gzip and brotli compressed responses transparently.
 func (p *proxyHandler) injectElementHidingCSS(resp *http.Response, host string) ([]byte, bool) {
 	if p.rules == nil {
 		return nil, false
@@ -27,23 +29,24 @@ func (p *proxyHandler) injectElementHidingCSS(resp *http.Response, host string) 
 		return nil, false
 	}
 
-	// Only decompress gzip — bail on other encodings (e.g. brotli) to avoid
-	// corrupting compressed bytes we can't decode
 	var body []byte
 	var err error
 	encoding := resp.Header.Get("Content-Encoding")
-	if encoding != "" && !strings.Contains(encoding, "gzip") {
-		return nil, false
-	}
-	if strings.Contains(encoding, "gzip") {
+	switch {
+	case strings.Contains(encoding, "gzip"):
 		gr, gzErr := gzip.NewReader(resp.Body)
 		if gzErr != nil {
 			return nil, false
 		}
 		body, err = io.ReadAll(gr)
 		gr.Close()
-	} else {
+	case strings.Contains(encoding, "br"):
+		body, err = io.ReadAll(brotli.NewReader(resp.Body))
+	case encoding == "":
 		body, err = io.ReadAll(resp.Body)
+	default:
+		// Unknown encoding (e.g. zstd) — pass through unmodified
+		return nil, false
 	}
 	if err != nil {
 		return nil, false

@@ -20,6 +20,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/andybalholm/brotli"
+
 	"ublproxy/pkg/blocklist"
 )
 
@@ -746,29 +748,26 @@ func TestNonHTMLPreservesCompression(t *testing.T) {
 	}
 }
 
-func TestElementHidingNonGzipPassesThrough(t *testing.T) {
+func TestElementHidingBrotli(t *testing.T) {
 	rs := blocklist.NewRuleSet()
 	rs.AddLine("##.ad-banner")
 
-	// Simulate a server that responds with brotli-encoded HTML. The proxy
-	// cannot decompress brotli, so it must pass the response through
-	// unmodified rather than corrupting it.
 	htmlBody := `<html><head></head><body>Hello</body></html>`
-	fakeCompressed := []byte{0x1b, 0x2f, 0x00, 0xf0} // not real brotli, just binary garbage
-	fakeCompressed = append(fakeCompressed, []byte(htmlBody)...)
 
 	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var buf bytes.Buffer
+		bw := brotli.NewWriter(&buf)
+		bw.Write([]byte(htmlBody))
+		bw.Close()
+
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Encoding", "br")
 		w.WriteHeader(http.StatusOK)
-		w.Write(fakeCompressed)
+		w.Write(buf.Bytes())
 	})
 
 	env := startTestEnv(t, upstream, rs)
 	client := env.httpClient(t)
-
-	// Disable automatic decompression so we can inspect raw bytes
-	client.Transport.(*http.Transport).DisableCompression = true
 
 	resp, err := client.Get(env.httpURL + "/page.html")
 	if err != nil {
@@ -777,15 +776,13 @@ func TestElementHidingNonGzipPassesThrough(t *testing.T) {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
 
-	// The response must be passed through exactly as the upstream sent it.
-	// Before the fix, the proxy would try to inject CSS into the compressed
-	// bytes, corrupting the response.
-	if len(body) != len(fakeCompressed) {
-		t.Errorf("body length = %d, want %d (response was modified)", len(body), len(fakeCompressed))
+	if !strings.Contains(bodyStr, "<style>") {
+		t.Errorf("brotli HTML should have CSS injected, got:\n%s", bodyStr)
 	}
-	if resp.Header.Get("Content-Encoding") != "br" {
-		t.Errorf("Content-Encoding = %q, want %q", resp.Header.Get("Content-Encoding"), "br")
+	if !strings.Contains(bodyStr, ".ad-banner") {
+		t.Errorf("brotli HTML should contain .ad-banner selector, got:\n%s", bodyStr)
 	}
 }
 
