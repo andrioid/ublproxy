@@ -193,7 +193,30 @@ func (r *Rule) matchURL(url string) bool {
 		return matchSegments(r.segments, url, r.anchorEnd)
 	}
 
-	// No start anchor: try matching at every position
+	// No start anchor: find substring match. Use strings.Index to skip to
+	// positions where the leading literal actually appears.
+	if len(r.segments) > 0 && r.segments[0].kind == segLiteral {
+		lit := r.segments[0].literal
+		rest := url
+		offset := 0
+		for {
+			idx := strings.Index(rest, lit)
+			if idx < 0 {
+				return false
+			}
+			pos := offset + idx
+			if matchSegments(r.segments, url[pos:], r.anchorEnd) {
+				return true
+			}
+			offset = pos + 1
+			if offset >= len(url) {
+				return false
+			}
+			rest = url[offset:]
+		}
+	}
+
+	// Leading segment is separator or wildcard — fall back to scanning
 	for i := range len(url) {
 		if matchSegments(r.segments, url[i:], r.anchorEnd) {
 			return true
@@ -385,12 +408,29 @@ func matchSegmentsAt(segments []segment, si int, text string, ti int, anchorEnd 
 			si++
 			// If wildcard is the last segment, it matches everything
 			if si == len(segments) {
-				if anchorEnd {
-					return true
-				}
 				return true
 			}
-			// Try matching the rest of the pattern at every position
+			// If the next segment is a literal, use strings.Index to skip
+			// to positions where it could match instead of trying every byte
+			if segments[si].kind == segLiteral {
+				lit := segments[si].literal
+				pos := ti
+				for {
+					idx := strings.Index(text[pos:], lit)
+					if idx < 0 {
+						return false
+					}
+					candidate := pos + idx
+					if matchSegmentsAt(segments, si, text, candidate, anchorEnd) {
+						return true
+					}
+					pos = candidate + 1
+					if pos > len(text) {
+						return false
+					}
+				}
+			}
+			// Next segment is separator or wildcard — scan all positions
 			for pos := ti; pos <= len(text); pos++ {
 				if matchSegmentsAt(segments, si, text, pos, anchorEnd) {
 					return true

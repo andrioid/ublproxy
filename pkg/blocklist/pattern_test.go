@@ -176,6 +176,46 @@ func TestDomainOption(t *testing.T) {
 	}
 }
 
+func BenchmarkMatchSubstring(b *testing.B) {
+	// Non-anchored pattern: must scan the URL for a substring match
+	rule, _ := blocklist.Compile("/ads/banner*.gif")
+	url := "http://cdn.example.com/static/resources/images/v3/long/path/that/forces/many/scans/ads/banner123.gif"
+	b.ResetTimer()
+	for range b.N {
+		rule.Match(url)
+	}
+}
+
+func BenchmarkMatchWildcard(b *testing.B) {
+	// Pattern with multiple wildcards: forces backtracking
+	rule, _ := blocklist.Compile("ad*track*pixel*.gif")
+	url := "http://example.com/ad-network/track-event/pixel-data.gif?v=123"
+	b.ResetTimer()
+	for range b.N {
+		rule.Match(url)
+	}
+}
+
+func BenchmarkMatchDomainAnchor(b *testing.B) {
+	// Domain-anchored with path: typical adblock rule
+	rule, _ := blocklist.Compile("||example.com/ads/*.gif")
+	url := "http://example.com/ads/banner123.gif"
+	b.ResetTimer()
+	for range b.N {
+		rule.Match(url)
+	}
+}
+
+func BenchmarkMatchNoMatch(b *testing.B) {
+	// Non-anchored pattern against a long URL that doesn't match: worst case
+	rule, _ := blocklist.Compile("zzz-nonexistent-pattern")
+	url := "http://cdn.example.com/static/resources/images/v3/long/path/that/forces/many/scans/and/never/matches.gif"
+	b.ResetTimer()
+	for range b.N {
+		rule.Match(url)
+	}
+}
+
 func TestOptionsStrippedFromPattern(t *testing.T) {
 	// The $options suffix should not be part of the URL pattern
 	rule, _ := blocklist.Compile("/ads/banner.gif$match-case")
