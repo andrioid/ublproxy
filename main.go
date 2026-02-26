@@ -28,8 +28,8 @@ func main() {
 	port := flag.Int("port", 8080, "port to listen on")
 	caDir := flag.String("ca-dir", filepath.Join(home, ".ublproxy"), "directory for CA certificate and key")
 
-	var blocklistPaths stringSlice
-	flag.Var(&blocklistPaths, "blocklist", "path to a blocklist file (can be specified multiple times)")
+	var blocklistSources stringSlice
+	flag.Var(&blocklistSources, "blocklist", "path or URL to a blocklist file (can be specified multiple times)")
 
 	flag.Parse()
 
@@ -40,10 +40,17 @@ func main() {
 	}
 
 	var rules *blocklist.RuleSet
-	if len(blocklistPaths) > 0 {
+	if len(blocklistSources) > 0 {
 		rules = blocklist.NewRuleSet()
-		for _, path := range blocklistPaths {
-			if err := rules.LoadFile(path); err != nil {
+		for _, src := range blocklistSources {
+			var err error
+			if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
+				fmt.Fprintf(os.Stderr, "Fetching %s\n", src)
+				err = rules.LoadURL(src)
+			} else {
+				err = rules.LoadFile(src)
+			}
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to load blocklist: %v\n", err)
 				os.Exit(1)
 			}

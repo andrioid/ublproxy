@@ -50,7 +50,7 @@ mise run dev
 | `--addr` | `127.0.0.1` | Address to listen on |
 | `--port` | `8080` | Port to listen on |
 | `--ca-dir` | `~/.ublproxy/` | Directory for CA certificate and key |
-| `--blocklist` | *(none)* | Path to a blocklist file (can be specified multiple times) |
+| `--blocklist` | *(none)* | Path or URL to a blocklist file (can be specified multiple times) |
 
 On first run, a CA certificate and key are generated in the `--ca-dir` directory. You need to trust the CA certificate (`ca.crt`) in your OS or browser for HTTPS interception to work without warnings.
 
@@ -117,6 +117,14 @@ diff tmp/without-proxy.html tmp/with-proxy.html
 
 ```sh
 mise run dev -- --blocklist examples/is.rules --blocklist examples/dk.rules
+```
+
+### Using remote blocklists
+
+The `--blocklist` flag accepts URLs. Lists are downloaded once at startup (30-second timeout).
+
+```sh
+mise run dev -- --blocklist https://easylist.to/easylist/easylist.txt --blocklist examples/dk.rules
 ```
 
 ## Testing
