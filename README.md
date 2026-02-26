@@ -8,17 +8,20 @@ A proxy-server that filters ads from HTTPS/TLS traffic using adblock rules, with
 # Build
 go build -o ublproxy .
 
-# Run with EasyList
-ublproxy --blocklist https://easylist.to/easylist/easylist.txt
+# Run (EasyList + EasyPrivacy enabled by default)
+./ublproxy
 ```
 
-The proxy listens on `http://127.0.0.1:8080`. Configure your browser or OS to use it as an HTTP proxy.
+The proxy runs on two ports:
 
-An HTTPS portal runs on `https://127.0.0.1:8443` for account registration and rule management.
+- **HTTP `http://0.0.0.0:8080`** — Setup page and CA certificate download
+- **HTTPS `https://0.0.0.0:8443`** — Proxy, management portal, and API
+
+Configure your browser or OS to use `https://127.0.0.1:8443` as an HTTPS proxy.
 
 ### CA certificate
 
-The proxy generates a CA certificate to intercept HTTPS traffic. Visit `http://127.0.0.1:8080/` in your browser (while using the proxy) to download and install the CA certificate. Your browser/OS must trust this certificate for HTTPS filtering to work.
+The proxy generates a CA certificate to intercept HTTPS traffic. Visit `http://127.0.0.1:8080/` in your browser to download and install the CA certificate. Your browser/OS must trust this certificate for HTTPS filtering to work.
 
 ## Custom rules
 
@@ -73,12 +76,14 @@ Rules follow [adblock filter syntax](https://adblockplus.org/filter-cheatsheet).
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-addr` | `127.0.0.1` | Address to listen on |
-| `-port` | `8080` | HTTP proxy port |
-| `-portal-port` | `8443` | HTTPS portal port |
+| `-addr` | `0.0.0.0` | Address to listen on |
+| `-http-port` | `8080` | HTTP port for setup page and CA certificate download |
+| `-https-port` | `8443` | HTTPS port for proxy, portal, and API |
+| `-hostname` | `localhost` | Portal hostname for WebAuthn and TLS cert (must be a domain, not an IP) |
 | `-ca-dir` | `~/.ublproxy` | Directory for CA certificate and key |
 | `-db` | `~/.ublproxy/ublproxy.db` | Path to SQLite database |
 | `-blocklist` | (none) | Path or URL to a blocklist file (repeatable) |
+| `-default-subscription` | EasyList + EasyPrivacy | Default blocklist subscription URL, always active for all users (repeatable) |
 
 ## Known limitations
 

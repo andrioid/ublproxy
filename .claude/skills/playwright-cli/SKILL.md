@@ -57,21 +57,9 @@ grep "||.*example" examples/is.rules
 grep "^##" examples/is.rules
 ```
 
-### 3. Verify element replacement
+### 3. Verify element hiding CSS injection
 
-Matched elements are replaced with `<!-- ublproxy: replaced .selector -->` comments in the DOM:
-
-```bash
-playwright-cli -s=proxy eval "() => {
-  const html = document.documentElement.innerHTML;
-  const matches = html.match(/<!-- ublproxy: replaced [^>]+ -->/g);
-  return { found: (matches || []).length, replacements: matches || [] };
-}"
-```
-
-### 4. Verify CSS fallback injection
-
-Complex selectors fall back to CSS `display: none` injection. Check for injected `<style>` tags:
+Element hiding injects `display: none !important` CSS rules into HTML responses. Check for injected `<style>` tags:
 
 ```bash
 playwright-cli -s=proxy eval "() => {
@@ -85,7 +73,7 @@ playwright-cli -s=proxy eval "() => {
 }"
 ```
 
-### 5. Verify request blocking
+### 4. Verify request blocking
 
 Check network log for failed requests to blocked domains:
 
@@ -99,14 +87,14 @@ Requests to blocked domains should appear as failed. Compare with the no-proxy s
 playwright-cli -s=no-proxy network
 ```
 
-### 6. Take comparison screenshots
+### 5. Take comparison screenshots
 
 ```bash
 playwright-cli -s=proxy screenshot --filename=tmp/with-proxy.png
 playwright-cli -s=no-proxy screenshot --filename=tmp/without-proxy.png
 ```
 
-### 7. Cleanup
+### 6. Cleanup
 
 ```bash
 playwright-cli -s=proxy close
@@ -226,5 +214,5 @@ After each command, playwright-cli provides a snapshot of the current browser st
 - **HTTPS timeouts** -- the proxy config (`playwright-cli-proxy.json`) sets `ignoreHTTPSErrors: true`. Verify the config file exists and is passed via `--config`.
 - **Navigation timeout** -- the target site may be down. Try `curl --max-time 5 https://example.is` to verify.
 - **Cloudflare challenge** -- some sites block headless browsers. The page title will be "Just a moment...". Try a different site.
-- **No element replacements** -- the page may use zstd compression (not yet supported) or the selectors may no longer match the current site markup.
+- **No element hiding CSS** -- the page may use zstd compression (not yet supported) or the selectors may no longer match the current site markup.
 - **Stale sessions** -- if browsers become unresponsive, run `playwright-cli kill-all`.

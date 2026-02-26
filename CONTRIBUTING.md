@@ -21,7 +21,7 @@ mise run dev    # build and start the proxy
 Pass flags through to the underlying command with `--`:
 
 ```sh
-mise run dev -- --port 9090
+mise run dev -- --https-port 9090
 mise run test -- -v -run TestPortal
 ```
 
@@ -47,10 +47,14 @@ mise run dev
 
 | Flag | Default | Description |
 |---|---|---|
-| `--addr` | `127.0.0.1` | Address to listen on |
-| `--port` | `8080` | Port to listen on |
+| `--addr` | `0.0.0.0` | Address to listen on |
+| `--http-port` | `8080` | HTTP port for setup page and CA certificate download |
+| `--https-port` | `8443` | HTTPS port for proxy, portal, and API |
+| `--hostname` | `localhost` | Portal hostname for WebAuthn and TLS cert (must be a domain, not an IP) |
 | `--ca-dir` | `~/.ublproxy/` | Directory for CA certificate and key |
+| `--db` | `~/.ublproxy/ublproxy.db` | Path to SQLite database |
 | `--blocklist` | *(none)* | Path or URL to a blocklist file (can be specified multiple times) |
+| `--default-subscription` | EasyList + EasyPrivacy | Default blocklist subscription URL, always active for all users (can be specified multiple times) |
 
 On first run, a CA certificate and key are generated in the `--ca-dir` directory. You need to trust the CA certificate (`ca.crt`) in your OS or browser for HTTPS interception to work without warnings.
 
@@ -64,14 +68,11 @@ mise run dev -- --blocklist examples/is.rules
 ```
 
 ```sh
-# Plain HTTP
-curl --proxy http://127.0.0.1:8080 http://example.com
-
 # HTTPS (trusting the generated CA)
-curl --proxy http://127.0.0.1:8080 --cacert ~/.ublproxy/ca.crt https://example.com
+curl --proxy https://127.0.0.1:8443 --proxy-cacert ~/.ublproxy/ca.crt --cacert ~/.ublproxy/ca.crt https://example.com
 
 # HTTPS (skip certificate verification — quick and dirty)
-curl --proxy http://127.0.0.1:8080 -k https://example.com
+curl --proxy https://127.0.0.1:8443 --proxy-insecure -k https://example.com
 ```
 
 ### Verifying request blocking
@@ -79,25 +80,16 @@ curl --proxy http://127.0.0.1:8080 -k https://example.com
 Blocked hostnames return 403 for HTTPS (CONNECT) requests:
 
 ```sh
-curl -v --proxy http://127.0.0.1:8080 -k https://ads.example.com 2>&1 | grep "< HTTP"
+curl -v --proxy https://127.0.0.1:8443 --proxy-insecure -k https://ads.example.com 2>&1 | grep "< HTTP"
 # Expected: HTTP/1.1 403 Forbidden
 ```
 
-### Verifying element replacement
+### Verifying element hiding
 
-Matched elements are replaced with `<!-- ublproxy: replaced .selector -->` comments. Check for them in the HTML output:
-
-```sh
-curl -s --proxy http://127.0.0.1:8080 -k https://some-site.com \
-  | grep 'ublproxy: replaced'
-```
-
-### Verifying CSS fallback
-
-Complex selectors that can't be matched on a single element fall back to CSS `display: none` injection. Check for the injected style tag:
+Element hiding uses CSS injection (`display: none !important`). Check for the injected style tag:
 
 ```sh
-curl -s --proxy http://127.0.0.1:8080 -k https://some-site.com \
+curl -s --proxy https://127.0.0.1:8443 --proxy-insecure -k https://some-site.com \
   | grep 'display: none'
 ```
 
@@ -105,7 +97,7 @@ curl -s --proxy http://127.0.0.1:8080 -k https://some-site.com \
 
 ```sh
 # Through the proxy
-curl -s --proxy http://127.0.0.1:8080 -k https://some-site.com > tmp/with-proxy.html
+curl -s --proxy https://127.0.0.1:8443 --proxy-insecure -k https://some-site.com > tmp/with-proxy.html
 
 # Direct
 curl -s https://some-site.com --compressed > tmp/without-proxy.html
@@ -121,7 +113,7 @@ mise run dev -- --blocklist examples/is.rules --blocklist examples/dk.rules
 
 ### Using remote blocklists
 
-The `--blocklist` flag accepts URLs. Lists are downloaded once at startup (30-second timeout).
+The `--blocklist` flag accepts URLs. Lists are downloaded once at startup (5-second timeout).
 
 ```sh
 mise run dev -- --blocklist https://easylist.to/easylist/easylist.txt --blocklist examples/dk.rules
@@ -159,8 +151,8 @@ Interact with sessions using `playwright-cli -s=proxy <command>` or `playwright-
 playwright-cli -s=proxy screenshot --filename=tmp/with-proxy.png
 playwright-cli -s=no-proxy screenshot --filename=tmp/without-proxy.png
 
-# Check for element replacements in the DOM
-playwright-cli -s=proxy eval "document.documentElement.innerHTML.match(/<!-- ublproxy: replaced [^>]+ -->/g)"
+# Check for element hiding CSS in the page
+playwright-cli -s=proxy eval "[...document.querySelectorAll('style')].map(s => s.textContent).filter(t => t.includes('display: none'))"
 
 # Close sessions when done
 playwright-cli close-all
@@ -182,20 +174,38 @@ Proxy code lives in `package main` in the project root. The `pkg/` directory con
 
 | File | Responsibility |
 |---|---|
-| `main.go` | CLI flag parsing, startup |
+| `main.go` | CLI flag parsing, wiring, startup |
 | `ca.go` | CA certificate loading, generation, and persistence to disk |
 | `cert.go` | Per-host TLS certificate generation and in-memory cache |
-| `proxy.go` | Top-level HTTP handler, dispatches to HTTP or CONNECT handler |
+| `proxy.go` | Proxy handler, baseline/per-user rule loading, request dispatch |
 | `http.go` | Plain HTTP request forwarding, hop-by-hop header stripping |
 | `connect.go` | CONNECT method handling, TLS MITM, request forwarding |
-| `elemhide_inject.go` | HTML element replacement and CSS fallback injection |
-| `portal.go` | Direct-access page with CA cert download and install instructions |
+| `portal.go` | Portal and setup page serving (embeds static HTML) |
+| `portal_https.go` | HTTPS listener, TLS termination, request routing |
+| `api.go` | API handler, routing, CORS, and auth middleware |
+| `api_auth.go` | WebAuthn registration and login API endpoints |
+| `api_rules.go` | Per-user blocking rule CRUD API |
+| `api_subscriptions.go` | Per-user blocklist subscription API |
+| `elemhide_inject.go` | Element hiding CSS injection into HTML responses |
+| `inject.go` | Bootstrap script and picker injection into HTML responses |
+| `websocket.go` | WebSocket upgrade detection and tunnel support |
+| `session_map.go` | Client IP to session/credential mapping |
 | `log.go` | Request and error logging to stderr |
-| `proxy_test.go` | End-to-end tests for both HTTP and HTTPS proxy flows |
-| `pkg/blocklist/` | Blocklist parsing (adblock + hosts-file), hostname matching, element hiding |
+| `proxy_test.go` | End-to-end proxy tests |
+| `inject_test.go` | Script injection tests |
+| `api_test.go` | API endpoint tests |
+| `pkg/blocklist/` | Blocklist parsing (adblock + hosts-file), hostname matching, element hiding, resource type detection |
+| `pkg/store/` | SQLite persistence for credentials, sessions, rules, subscriptions, and cache |
+| `pkg/webauthn/` | Minimal WebAuthn server (ES256/P-256 with "none" attestation) |
+| `static/portal.html` | Portal management UI |
+| `static/setup.html` | Setup page for CA certificate installation |
+| `static/bootstrap.js` | Injected bootstrap script (keyboard shortcut, picker loader) |
+| `static/picker.js` | Element picker UI (Shadow DOM isolated) |
 | `scripts/build` | Build task |
 | `scripts/test` | Test task |
 | `scripts/dev` | Build + run task for development |
+| `scripts/browser` | Open a Playwright browser through the proxy |
+| `scripts/browser-no-proxy` | Open a Playwright browser without the proxy (for comparison) |
 
 ## Code style
 
