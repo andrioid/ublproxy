@@ -275,6 +275,27 @@ func TestCORSPreflight(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Methods"); got == "" {
 		t.Error("missing Access-Control-Allow-Methods header")
 	}
+	// Without Origin header, falls back to portal origin
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != testAPIConfig.RPOrigin {
+		t.Errorf("CORS origin without Origin header = %q, want %q", got, testAPIConfig.RPOrigin)
+	}
+}
+
+func TestCORSReflectsRequestOrigin(t *testing.T) {
+	api := testAPI(t)
+
+	// Preflight from a proxied page origin
+	req := httptest.NewRequest("OPTIONS", "/api/rules", nil)
+	req.Header.Set("Origin", "https://example.com")
+	rec := httptest.NewRecorder()
+	api.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://example.com" {
+		t.Errorf("CORS origin = %q, want %q", got, "https://example.com")
+	}
+	if got := rec.Header().Get("Vary"); !strings.Contains(got, "Origin") {
+		t.Errorf("Vary header = %q, should contain Origin", got)
+	}
 }
 
 func TestPickerJSRequiresAuth(t *testing.T) {

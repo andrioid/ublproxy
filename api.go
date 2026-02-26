@@ -52,11 +52,20 @@ func newAPIHandler(s *store.Store, cfg webauthn.Config, sm *sessionMap) *apiHand
 }
 
 func (a *apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// CORS headers for cross-origin requests from injected scripts
-	w.Header().Set("Access-Control-Allow-Origin", a.webauthnCfg.RPOrigin)
+	// CORS: reflect the requesting origin. Injected scripts run on arbitrary
+	// proxied pages (e.g. https://example.com) and make cross-origin requests
+	// to the portal (e.g. https://127.0.0.1:8443). All state-changing endpoints
+	// require a Bearer token, so reflecting the origin is safe — the token is
+	// never auto-sent by the browser.
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		origin = a.webauthnCfg.RPOrigin
+	}
+	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 	w.Header().Set("Access-Control-Allow-Credentials", "true")
+	w.Header().Set("Vary", "Origin")
 
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
