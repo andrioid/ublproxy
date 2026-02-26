@@ -188,6 +188,7 @@ function onMouseDown(e) {
 
   e.preventDefault();
   e.stopPropagation();
+  e.stopImmediatePropagation();
 
   if (!currentTarget) return;
 
@@ -203,6 +204,25 @@ function onMouseDown(e) {
   domainEl.style.display = "block";
   buttonsEl.style.display = "flex";
   statusEl.style.display = "none";
+}
+
+// Prevent click and mouseup from reaching the page while picking.
+// mousedown alone isn't enough — browsers fire click after mouseup,
+// which triggers link navigation on ad anchors.
+function onClickCapture(e) {
+  if (!picking && !selectedElement) return;
+  if (isPickerElement(e.target)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+}
+
+function onMouseUp(e) {
+  if (!picking && !selectedElement) return;
+  if (isPickerElement(e.target)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();
 }
 
 function resetPicker() {
@@ -225,6 +245,8 @@ function closePicker() {
   // Remove all event listeners to allow clean re-open
   document.removeEventListener("mousemove", onMouseMove, true);
   document.removeEventListener("mousedown", onMouseDown, true);
+  document.removeEventListener("click", onClickCapture, true);
+  document.removeEventListener("mouseup", onMouseUp, true);
   document.removeEventListener("keydown", onKeyDown, true);
   document.removeEventListener("mousemove", onDragMove);
   document.removeEventListener("mouseup", onDragUp);
@@ -238,6 +260,8 @@ function openPicker() {
   // Re-register all event listeners
   document.addEventListener("mousemove", onMouseMove, true);
   document.addEventListener("mousedown", onMouseDown, true);
+  document.addEventListener("click", onClickCapture, true);
+  document.addEventListener("mouseup", onMouseUp, true);
   document.addEventListener("keydown", onKeyDown, true);
   document.addEventListener("mousemove", onDragMove);
   document.addEventListener("mouseup", onDragUp);
@@ -321,4 +345,6 @@ closeBtn.addEventListener("click", closePicker);
 
 document.addEventListener("mousemove", onMouseMove, true);
 document.addEventListener("mousedown", onMouseDown, true);
+document.addEventListener("click", onClickCapture, true);
+document.addEventListener("mouseup", onMouseUp, true);
 document.addEventListener("keydown", onKeyDown, true);
