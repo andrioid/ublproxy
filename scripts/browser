@@ -2,8 +2,8 @@
 #MISE description="Open a browser routed through the proxy"
 set -euo pipefail
 
-if ! curl -s --max-time 2 --proxy http://127.0.0.1:8080 http://example.com -o /dev/null 2>/dev/null; then
-  echo "Error: proxy is not running on 127.0.0.1:8080"
+if ! curl -s --max-time 2 --proxy https://localhost:8443 --proxy-insecure -k https://example.com -o /dev/null 2>/dev/null; then
+  echo "Error: proxy is not running on localhost:8443"
   echo "Start it first: mise run dev -- --blocklist examples/is.rules"
   exit 1
 fi

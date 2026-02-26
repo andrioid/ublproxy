@@ -40,7 +40,6 @@
     font-size: 0.85em;
     font-family: inherit;
   }
-  .section { border-top: 1px solid #eee; padding-top: 1rem; margin-top: 1rem; }
   .card {
     background: #f8fafc;
     border: 1px solid #e2e8f0;
@@ -82,17 +81,6 @@
   .msg.info { display: block; background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
   .auth-status { font-size: 0.9rem; color: #666; }
   .auth-status .ok { color: #166534; font-weight: 500; }
-  .download {
-    display: inline-block;
-    background: #2563eb;
-    color: #fff;
-    text-decoration: none;
-    padding: 0.6rem 1.2rem;
-    border-radius: 6px;
-    font-weight: 500;
-    margin-bottom: 1.5rem;
-  }
-  .download:hover { background: #1d4ed8; }
   .hidden { display: none !important; }
   .rule-list, .sub-list { list-style: none; padding: 0; margin: 0.75rem 0 0; }
   .rule-item, .sub-item {
@@ -180,12 +168,16 @@
   }
   .card-header h2 { margin: 0; }
   .count { font-size: 0.8rem; color: #999; font-weight: normal; }
+  .ca-link { font-size: 0.85rem; color: #666; margin-bottom: 1.5rem; }
+  .ca-link a { color: #2563eb; }
 </style>
 </head>
 <body>
 <div class="container">
   <h1>ublproxy</h1>
   <p class="subtitle">Ad-blocking proxy with interactive element picker.</p>
+
+  <p class="ca-link" id="ca-link"><a href="/setup">Install CA certificate</a> &mdash; required for HTTPS interception</p>
 
   <div class="card" id="auth-card">
     <h2>Authentication</h2>
@@ -233,46 +225,6 @@
       <a href="#" class="suggest-link" data-url="https://raw.githubusercontent.com/nickspaargaren/no-google/refs/heads/master/pihole-google.txt" data-name="No Google">No Google</a>
     </div>
     <div class="msg" id="subs-msg"></div>
-  </div>
-
-  <p class="subtitle">To intercept HTTPS traffic, your browser or OS must trust the ublproxy CA certificate.</p>
-  <a class="download" href="/ca.crt">Download CA Certificate</a>
-
-  <div class="section">
-    <h2>Install on macOS</h2>
-    <ol>
-      <li>Download <a href="/ca.crt">ca.crt</a> and open it &mdash; Keychain Access will launch</li>
-      <li>Add the certificate to the <strong>System</strong> keychain</li>
-      <li>Find <strong>ublproxy CA</strong> in the list, double-click it</li>
-      <li>Expand <strong>Trust</strong> and set <em>When using this certificate</em> to <strong>Always Trust</strong></li>
-    </ol>
-  </div>
-
-  <div class="section">
-    <h2>Install on Linux</h2>
-    <ol>
-      <li>Copy the certificate: <code>sudo cp ublproxy-ca.crt /usr/local/share/ca-certificates/</code></li>
-      <li>Update the trust store: <code>sudo update-ca-certificates</code></li>
-    </ol>
-  </div>
-
-  <div class="section">
-    <h2>Install on Windows</h2>
-    <ol>
-      <li>Download <a href="/ca.crt">ca.crt</a> and double-click it</li>
-      <li>Click <strong>Install Certificate</strong></li>
-      <li>Select <strong>Local Machine</strong>, then <strong>Place all certificates in the following store</strong></li>
-      <li>Choose <strong>Trusted Root Certification Authorities</strong> and finish the wizard</li>
-    </ol>
-  </div>
-
-  <div class="section">
-    <h2>Install in Firefox</h2>
-    <ol>
-      <li>Open <strong>Settings &rarr; Privacy &amp; Security &rarr; Certificates &rarr; View Certificates</strong></li>
-      <li>Click <strong>Import</strong> and select the downloaded <a href="/ca.crt">ca.crt</a></li>
-      <li>Check <strong>Trust this CA to identify websites</strong> and confirm</li>
-    </ol>
   </div>
 </div>
 <script>
@@ -670,6 +622,12 @@
       addSubscription(this.dataset.url, this.dataset.name);
     });
   });
+
+  // If on HTTPS the CA is already trusted (browser would show a
+  // certificate warning otherwise), so hide the install link.
+  if (location.protocol === 'https:') {
+    hide(document.getElementById('ca-link'));
+  }
 
   checkSession();
 })();

@@ -8,23 +8,36 @@ import (
 	"os"
 )
 
-// portalServer is the HTTPS server for the portal. It serves the dashboard,
-// WebAuthn auth endpoints, and the rule management API. Separate from the
-// HTTP proxy so that WebAuthn works (requires a secure context).
-type portalServer struct {
-	handler *portalHandler
-	addr    string
-}
-
-// portalHandler routes requests on the HTTPS portal.
+// portalHandler routes requests on the HTTPS port. It serves the proxy
+// (CONNECT tunnels and HTTP forwarding), the management portal, and
+// the API. All traffic on this listener is TLS-encrypted.
 type portalHandler struct {
 	proxy *proxyHandler
 	api   *apiHandler
 }
 
 func (h *portalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Proxy: CONNECT tunnels (browser requests HTTPS via the proxy)
+	if r.Method == http.MethodConnect {
+		h.proxy.handleConnect(w, r)
+		return
+	}
+	// Proxy: HTTP forward (absolute-URI requests through the proxy)
+	if r.URL.Host != "" {
+		h.proxy.handleHTTP(w, r)
+		return
+	}
+	// Direct requests to this server (portal, API, setup, CA cert, PAC)
 	if r.URL.Path == "/ca.crt" {
 		h.proxy.handlePortalCACert(w, r)
+		return
+	}
+	if r.URL.Path == "/proxy.pac" {
+		h.proxy.handlePAC(w, r)
+		return
+	}
+	if r.URL.Path == "/setup" {
+		h.proxy.handleSetup(w, r)
 		return
 	}
 	if r.URL.Path == "/" {
@@ -38,12 +51,10 @@ func (h *portalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
-// startPortalHTTPS starts the HTTPS portal server using a TLS certificate
-// signed by the proxy's CA. The cert is generated for the listen address
-// so clients that trust the CA can connect without warnings.
+// startPortalHTTPS starts the HTTPS server that handles both proxy
+// traffic and the management portal. HTTP/2 is disabled because
+// CONNECT tunnels require Hijack which only works with HTTP/1.1.
 func startPortalHTTPS(listenAddr string, host string, extraIPs []net.IP, certs *certCache, handler *portalHandler) {
-	// Generate a TLS cert that covers the portal hostname, localhost,
-	// 127.0.0.1, and any additional IPs (e.g. the LAN IP).
 	cert, err := certs.portalCert(host, extraIPs...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "portal: failed to generate TLS cert: %v\n", err)
@@ -58,13 +69,15 @@ func startPortalHTTPS(listenAddr string, host string, extraIPs []net.IP, certs *
 		Addr:      listenAddr,
 		Handler:   handler,
 		TLSConfig: tlsConfig,
+		// Disable HTTP/2 — CONNECT proxy requires Hijack() which is
+		// only supported on HTTP/1.1 connections.
+		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 	}
 
-	fmt.Fprintf(os.Stderr, "ublproxy portal listening on https://%s\n", listenAddr)
+	fmt.Fprintf(os.Stderr, "ublproxy proxy+portal listening on https://%s\n", listenAddr)
 
-	// TLS certs are already in the config, so pass empty strings
 	if err := server.ListenAndServeTLS("", ""); err != nil {
-		fmt.Fprintf(os.Stderr, "portal server error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
 	}
 }

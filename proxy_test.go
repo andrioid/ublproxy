@@ -35,6 +35,7 @@ type testEnv struct {
 	httpURL  string
 	httpsURL string
 	caPool   *x509.CertPool
+	handler  *proxyHandler
 }
 
 // startTestEnv spins up an upstream HTTP server, an upstream HTTPS server, and
@@ -86,6 +87,7 @@ func startTestEnv(t *testing.T, upstreamHandler http.Handler, rules *blocklist.R
 		httpURL:  httpServer.URL,
 		httpsURL: httpsServer.URL,
 		caPool:   caPool,
+		handler:  handler,
 	}
 }
 
@@ -340,6 +342,40 @@ func TestPortalCACertDownload(t *testing.T) {
 
 	if cert.Subject.CommonName != "ublproxy CA" {
 		t.Errorf("certificate CN = %q, want %q", cert.Subject.CommonName, "ublproxy CA")
+	}
+}
+
+func TestProxyPAC(t *testing.T) {
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), nil)
+
+	// Set portalOrigin so the PAC template can extract host:port
+	env.handler.portalOrigin = "https://myhost:9443"
+
+	resp, err := http.Get(env.proxyURL + "/proxy.pac")
+	if err != nil {
+		t.Fatalf("GET /proxy.pac: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType != "application/x-ns-proxy-autoconfig" {
+		t.Errorf("Content-Type = %q, want %q", contentType, "application/x-ns-proxy-autoconfig")
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "FindProxyForURL") {
+		t.Error("PAC body does not contain FindProxyForURL function")
+	}
+	if !strings.Contains(bodyStr, "HTTPS myhost:9443") {
+		t.Errorf("PAC body does not contain expected proxy directive, got:\n%s", bodyStr)
 	}
 }
 

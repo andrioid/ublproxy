@@ -30,8 +30,8 @@ func main() {
 	defaultDataDir := filepath.Join(home, ".ublproxy")
 
 	addr := flag.String("addr", "0.0.0.0", "address to listen on (0.0.0.0 for all interfaces)")
-	port := flag.Int("port", 8080, "port to listen on")
-	portalPort := flag.Int("portal-port", 8443, "HTTPS portal port for WebAuthn and rule management")
+	httpPort := flag.Int("http-port", 8080, "HTTP port for setup page and CA certificate download")
+	httpsPort := flag.Int("https-port", 8443, "HTTPS port for proxy, portal, and API")
 	hostname := flag.String("hostname", "localhost", "portal hostname for WebAuthn and TLS cert (must be a domain, not an IP)")
 	caDir := flag.String("ca-dir", defaultDataDir, "directory for CA certificate and key")
 	dbPath := flag.String("db", filepath.Join(defaultDataDir, "ublproxy.db"), "path to SQLite database")
@@ -82,7 +82,7 @@ func main() {
 
 	// Configure WebAuthn with the portal hostname. WebAuthn requires a
 	// domain name as RP ID — IP addresses are not allowed by the spec.
-	portalOrigin := fmt.Sprintf("https://%s:%d", *hostname, *portalPort)
+	portalOrigin := fmt.Sprintf("https://%s:%d", *hostname, *httpsPort)
 	webauthnCfg := webauthn.Config{
 		RPID:     *hostname,
 		RPName:   "ublproxy",
@@ -103,16 +103,20 @@ func main() {
 		extraIPs = append(extraIPs, net.ParseIP(lanIP))
 	}
 
-	// Start HTTPS portal in a goroutine
-	portalAddr := fmt.Sprintf("%s:%d", *addr, *portalPort)
+	// Start HTTPS proxy+portal server in a goroutine. This handles
+	// proxy CONNECT/forward, the management portal, and the API.
+	httpsAddr := fmt.Sprintf("%s:%d", *addr, *httpsPort)
 	portalH := &portalHandler{proxy: handler, api: api}
-	go startPortalHTTPS(portalAddr, *hostname, extraIPs, certs, portalH)
+	go startPortalHTTPS(httpsAddr, *hostname, extraIPs, certs, portalH)
 
-	listenAddr := fmt.Sprintf("%s:%d", *addr, *port)
-	fmt.Fprintf(os.Stderr, "ublproxy listening on http://%s\n", listenAddr)
-	fmt.Fprintf(os.Stderr, "ublproxy portal at %s\n", portalOrigin)
+	// HTTP server serves only the setup page and CA certificate download.
+	// No proxy, no API — those require TLS on the HTTPS port.
+	httpAddr := fmt.Sprintf("%s:%d", *addr, *httpPort)
+	setupH := &setupHandler{caCertPEM: caCertPEM, portalOrigin: portalOrigin}
+	fmt.Fprintf(os.Stderr, "ublproxy setup page on http://%s\n", httpAddr)
+	fmt.Fprintf(os.Stderr, "ublproxy proxy+portal on %s\n", portalOrigin)
 
-	if err := http.ListenAndServe(listenAddr, handler); err != nil {
+	if err := http.ListenAndServe(httpAddr, setupH); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
 	}
