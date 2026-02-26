@@ -2,12 +2,22 @@ package main
 
 import (
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
 
 	"ublproxy/pkg/blocklist"
 )
+
+// clientIPFromRequest extracts the IP address from the request's RemoteAddr.
+func clientIPFromRequest(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
 
 // Headers that must not be forwarded between hops.
 // https://www.rfc-editor.org/rfc/rfc2616#section-13.5.1
@@ -24,7 +34,8 @@ var hopByHopHeaders = []string{
 
 func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := matchContextFromRequest(r)
-	if p.rules.ShouldBlockRequest(r.URL.String(), ctx) {
+	rules := p.getRules()
+	if rules != nil && rules.ShouldBlockRequest(r.URL.String(), ctx) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -57,7 +68,7 @@ func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Replace ad elements in HTML responses (skip HEAD — no body to modify)
 	if r.Method != http.MethodHead {
-		if modified, ok := p.applyElementHiding(resp, r.URL.Hostname()); ok {
+		if modified, ok := p.applyElementHiding(resp, r.URL.Hostname(), clientIPFromRequest(r)); ok {
 			copyHeaders(w.Header(), resp.Header)
 			removeHopByHopHeaders(w.Header())
 			w.Header().Del("Content-Length")

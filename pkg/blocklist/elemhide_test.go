@@ -7,16 +7,10 @@ import (
 	"ublproxy/pkg/blocklist"
 )
 
-// selectorPresent returns true if the selector appears in either the matchers
-// or the CSS.
+// selectorPresent returns true if the selector appears in the CSS.
 func selectorPresent(eh *blocklist.ElementHiding, sel string) bool {
 	if eh == nil {
 		return false
-	}
-	for _, m := range eh.Matchers {
-		if m.Selector == sel {
-			return true
-		}
 	}
 	return strings.Contains(eh.CSS, sel)
 }
@@ -73,7 +67,7 @@ func TestElementHidingForDomain(t *testing.T) {
 	}
 }
 
-func TestElementHidingSimpleSelectors(t *testing.T) {
+func TestElementHidingCSS(t *testing.T) {
 	rs := blocklist.NewRuleSet()
 	rs.AddLine("##.ad-banner")
 
@@ -82,23 +76,16 @@ func TestElementHidingSimpleSelectors(t *testing.T) {
 		t.Fatal("expected non-nil ElementHiding")
 	}
 
-	if len(eh.Matchers) != 1 {
-		t.Fatalf("expected 1 matcher, got %d", len(eh.Matchers))
-	}
-	if eh.Matchers[0].Selector != ".ad-banner" {
-		t.Errorf("matcher selector = %q, want %q", eh.Matchers[0].Selector, ".ad-banner")
-	}
 	if !strings.Contains(eh.CSS, ".ad-banner") {
-		t.Errorf("simple selector should also appear in CSS, got:\n%s", eh.CSS)
+		t.Errorf("selector should appear in CSS, got:\n%s", eh.CSS)
 	}
 	if !strings.Contains(eh.CSS, "display: none !important") {
 		t.Errorf("CSS should use 'display: none !important', got:\n%s", eh.CSS)
 	}
 }
 
-func TestElementHidingComplexFallback(t *testing.T) {
+func TestElementHidingComplexSelector(t *testing.T) {
 	rs := blocklist.NewRuleSet()
-	// Complex selector: has descendant combinator (space)
 	rs.AddLine("example.com##div .ad-child")
 
 	eh := rs.ElementHidingForDomain("example.com")
@@ -106,9 +93,6 @@ func TestElementHidingComplexFallback(t *testing.T) {
 		t.Fatal("expected non-nil ElementHiding")
 	}
 
-	if len(eh.Matchers) != 0 {
-		t.Errorf("expected 0 matchers for complex selector, got %d", len(eh.Matchers))
-	}
 	if !strings.Contains(eh.CSS, "div .ad-child") {
 		t.Errorf("complex selector should be in CSS, got:\n%s", eh.CSS)
 	}

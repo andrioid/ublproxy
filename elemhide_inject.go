@@ -3,9 +3,10 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
-	"fmt"
+	htmlpkg "html"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/andybalholm/brotli"
@@ -13,6 +14,10 @@ import (
 
 	"ublproxy/pkg/blocklist"
 )
+
+// styleCloseRe matches </style in any case — used to prevent XSS via
+// user-created CSS rules that contain a closing </style> tag.
+var styleCloseRe = regexp.MustCompile(`(?i)</style`)
 
 // voidElements are HTML elements that have no closing tag.
 var voidElements = map[string]bool{
@@ -55,29 +60,36 @@ func (sc srcBlockContext) resolveSrc(src string) string {
 	return sc.scheme + "://" + sc.host + "/" + src
 }
 
-// applyElementHiding checks if the response is HTML and applies element hiding
-// and src-based stripping if applicable. Matched elements are replaced with
-// placeholder divs; complex selectors that can't be matched on a single element
-// fall back to CSS injection. Elements that load external resources (script,
-// iframe, object, embed) whose URL resolves to a blocked address are stripped.
+// applyElementHiding checks if the response is HTML and applies CSS-based
+// element hiding, src-based resource stripping, and bootstrap script injection.
+// Elements that load external resources (script, iframe, object, embed) whose
+// URL resolves to a blocked address are stripped from the DOM. All other element
+// hiding selectors are applied via CSS display:none injection only — content
+// elements are never removed from the DOM to avoid stripping legitimate page
+// content that happens to match generic selectors.
+// The bootstrap script for the element picker is injected when a session
+// exists for the client IP.
 // Returns the modified body and true, or nil and false if unmodified.
 // Handles gzip and brotli compressed responses transparently.
-func (p *proxyHandler) applyElementHiding(resp *http.Response, host string) ([]byte, bool) {
-	if p.rules == nil {
-		return nil, false
-	}
-
+func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP string) ([]byte, bool) {
 	contentType := resp.Header.Get("Content-Type")
 	if !strings.Contains(contentType, "text/html") {
 		return nil, false
 	}
 
-	eh := p.rules.ElementHidingForDomain(host)
+	var eh *blocklist.ElementHiding
+	var hasURLRules bool
+	rules := p.getRules()
+	if rules != nil {
+		eh = rules.ElementHidingForDomain(host)
+		hasURLRules = rules.HostCount() > 0 || rules.RuleCount() > 0
+	}
 
-	// Nothing to do if there are no element hiding rules and no URL rules
-	// that could match resource URLs on blockable elements.
-	hasURLRules := p.rules.HostCount() > 0 || p.rules.RuleCount() > 0
-	if eh == nil && !hasURLRules {
+	// Generate bootstrap script tag (empty string if no session)
+	scriptTag := p.bootstrapScriptTag(clientIP, host)
+
+	// Nothing to do if there are no rules AND no script to inject
+	if eh == nil && !hasURLRules && scriptTag == "" {
 		return nil, false
 	}
 
@@ -104,17 +116,19 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host string) ([]b
 		return nil, false
 	}
 
-	var matchers []blocklist.SelectorMatch
-	if eh != nil {
-		matchers = eh.Matchers
-	}
-
-	sc := srcBlockContext{scheme: "https", host: host, rules: p.rules}
-	modified := replaceElements(body, matchers, sc)
+	sc := srcBlockContext{scheme: "https", host: host, rules: rules}
+	modified := stripBlockedResources(body, sc)
 
 	if eh != nil && eh.CSS != "" {
-		styleTag := []byte("<style>" + eh.CSS + "</style>")
+		// Sanitize CSS to prevent XSS via </style> injection
+		safeCSS := styleCloseRe.ReplaceAllString(eh.CSS, `<\/style`)
+		styleTag := []byte("<style>" + safeCSS + "</style>")
 		modified = injectStyleTag(modified, styleTag)
+	}
+
+	// Inject the bootstrap script for the element picker
+	if scriptTag != "" {
+		modified = injectBeforeClose(modified, []byte(scriptTag), []byte("</body>"), []byte("</html>"))
 	}
 
 	// Remove Content-Encoding since we send uncompressed to the client.
@@ -124,12 +138,23 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host string) ([]b
 	return modified, true
 }
 
-// replaceElements uses the html tokenizer to walk through the HTML and replace
-// elements matching any of the simple selectors with placeholder divs.
-// It also strips elements (script, iframe, object, embed) whose resource URL
-// resolves to a blocked address.
-func replaceElements(src []byte, matchers []blocklist.SelectorMatch, sc srcBlockContext) []byte {
-	if len(matchers) == 0 && sc.rules == nil {
+// injectBeforeClose inserts content before the first found closing tag,
+// or appends if none is found. Tags are tried in order.
+func injectBeforeClose(htmlDoc, content []byte, tags ...[]byte) []byte {
+	for _, tag := range tags {
+		if idx := indexCaseInsensitive(htmlDoc, tag); idx >= 0 {
+			return insertAt(htmlDoc, content, idx)
+		}
+	}
+	return append(htmlDoc, content...)
+}
+
+// stripBlockedResources uses the HTML tokenizer to walk through the HTML and
+// strip elements (script, iframe, object, embed) whose external resource URL
+// resolves to a blocked address. Other elements are passed through unchanged —
+// element hiding for those is handled by CSS injection only.
+func stripBlockedResources(src []byte, sc srcBlockContext) []byte {
+	if sc.rules == nil {
 		return src
 	}
 
@@ -146,7 +171,6 @@ func replaceElements(src []byte, matchers []blocklist.SelectorMatch, sc srcBlock
 			if tokenizer.Err() == io.EOF {
 				return buf.Bytes()
 			}
-			// On error, append remaining raw bytes and return
 			buf.Write(tokenizer.Raw())
 			return buf.Bytes()
 
@@ -159,118 +183,37 @@ func replaceElements(src []byte, matchers []blocklist.SelectorMatch, sc srcBlock
 			// attribute names, which breaks React hydration.
 			rawBytes := copyBytes(tokenizer.Raw())
 
-			// For elements with a blockable resource URL (script, iframe,
-			// object, embed), check if the URL resolves to a blocked
-			// address before falling through to element hiding.
-			if urlAttr, blockable := srcBlockableTags[tagNameLower]; blockable && hasAttr && sc.rules != nil {
-				attrs := collectAttrs(tokenizer, hasAttr)
-				if urlVal, ok := attrs[urlAttr]; ok && urlVal != "" {
-					resolved := sc.resolveSrc(urlVal)
-					ctx := blocklist.MatchContext{PageDomain: sc.host}
-					if sc.rules.ShouldBlockRequest(resolved, ctx) {
-						replacement := fmt.Sprintf("<!-- ublproxy: blocked %s %s -->", tagNameLower, urlVal)
-						buf.WriteString(replacement)
-						if !voidElements[tagNameLower] {
-							skipUntilClose(tokenizer, tagNameLower)
-						}
-						continue
-					}
-				}
-				// Not blocked — check element hiding with pre-collected attrs
-				if matched, selector := matchesAnyWithAttrs(tagNameLower, attrs, matchers); matched {
-					replacement := fmt.Sprintf("<div><!-- ublproxy: replaced %s --></div>", selector)
-					buf.WriteString(replacement)
-					if !voidElements[tagNameLower] {
-						skipUntilClose(tokenizer, tagNameLower)
-					}
-					continue
-				}
+			urlAttr, blockable := srcBlockableTags[tagNameLower]
+			if !blockable || !hasAttr {
 				buf.Write(rawBytes)
 				continue
 			}
 
-			if matched, selector := matchesAny(tagNameLower, tokenizer, hasAttr, matchers); matched {
-				replacement := fmt.Sprintf("<div><!-- ublproxy: replaced %s --></div>", selector)
-				buf.WriteString(replacement)
+			attrs := collectAttrs(tokenizer, hasAttr)
+			urlVal, ok := attrs[urlAttr]
+			if !ok || urlVal == "" {
+				buf.Write(rawBytes)
+				continue
+			}
 
-				if voidElements[tagNameLower] {
-					continue
-				}
+			resolved := sc.resolveSrc(urlVal)
+			ctx := blocklist.MatchContext{PageDomain: sc.host}
+			if !sc.rules.ShouldBlockRequest(resolved, ctx) {
+				buf.Write(rawBytes)
+				continue
+			}
+
+			// HTML-encode the URL to prevent breaking out of the comment
+			replacement := "<!-- ublproxy: blocked " + tagNameLower + " " + htmlpkg.EscapeString(urlVal) + " -->"
+			buf.WriteString(replacement)
+			if !voidElements[tagNameLower] {
 				skipUntilClose(tokenizer, tagNameLower)
-				continue
 			}
-
-			buf.Write(rawBytes)
-
-		case html.SelfClosingTagToken:
-			tn, hasAttr := tokenizer.TagName()
-			tagNameLower := strings.ToLower(string(tn))
-			rawBytes := copyBytes(tokenizer.Raw())
-
-			if matched, selector := matchesAny(tagNameLower, tokenizer, hasAttr, matchers); matched {
-				replacement := fmt.Sprintf("<div><!-- ublproxy: replaced %s --></div>", selector)
-				buf.WriteString(replacement)
-				continue
-			}
-
-			buf.Write(rawBytes)
 
 		default:
 			buf.Write(tokenizer.Raw())
 		}
 	}
-}
-
-// matchesAny checks if the current element matches any of the simple selectors.
-// Collects attributes lazily from the tokenizer on first need.
-// Returns true and the matched selector string, or false.
-func matchesAny(tagName string, tokenizer *html.Tokenizer, hasAttr bool, matchers []blocklist.SelectorMatch) (bool, string) {
-	var attrs map[string]string
-
-	for i := range matchers {
-		sm := &matchers[i]
-
-		if sm.Tag != "" && sm.Tag != tagName {
-			continue
-		}
-
-		if attrs == nil {
-			attrs = collectAttrs(tokenizer, hasAttr)
-		}
-
-		attrFn := func(name string) string {
-			return attrs[name]
-		}
-
-		if sm.MatchesAttrs(tagName, attrFn) {
-			return true, sm.Selector
-		}
-	}
-
-	return false, ""
-}
-
-// matchesAnyWithAttrs checks if the element matches any selector using
-// a pre-collected attribute map. Used when attributes were already read
-// from the tokenizer (e.g. for script src checking).
-func matchesAnyWithAttrs(tagName string, attrs map[string]string, matchers []blocklist.SelectorMatch) (bool, string) {
-	for i := range matchers {
-		sm := &matchers[i]
-
-		if sm.Tag != "" && sm.Tag != tagName {
-			continue
-		}
-
-		attrFn := func(name string) string {
-			return attrs[name]
-		}
-
-		if sm.MatchesAttrs(tagName, attrFn) {
-			return true, sm.Selector
-		}
-	}
-
-	return false, ""
 }
 
 // copyBytes returns a copy of b. The tokenizer's Raw() returns a slice into

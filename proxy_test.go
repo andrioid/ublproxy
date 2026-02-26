@@ -15,14 +15,18 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/andybalholm/brotli"
 
 	"ublproxy/pkg/blocklist"
+	"ublproxy/pkg/store"
 )
 
 // testEnv holds everything needed to run a proxy e2e test.
@@ -616,7 +620,7 @@ func TestThirdPartyOption(t *testing.T) {
 	}
 }
 
-func TestElementHidingReplacesElements(t *testing.T) {
+func TestElementHidingCSSInjection(t *testing.T) {
 	rs := blocklist.NewRuleSet()
 	rs.AddLine("##.ad-banner")
 	rs.AddLine("##.tracking-pixel")
@@ -625,7 +629,7 @@ func TestElementHidingReplacesElements(t *testing.T) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`<html><head><title>Test</title></head><body>` +
-			`<div class="ad-banner"><script src="tracker.js"></script></div>` +
+			`<div class="ad-banner">Ad content</div>` +
 			`<img class="tracking-pixel" src="pixel.gif">` +
 			`<p>Real content</p>` +
 			`</body></html>`))
@@ -643,20 +647,23 @@ func TestElementHidingReplacesElements(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	bodyStr := string(body)
 
-	// Matched elements should be replaced with placeholder divs
-	if !strings.Contains(bodyStr, "<!-- ublproxy: replaced .ad-banner -->") {
-		t.Errorf("response should contain replacement for .ad-banner, got:\n%s", bodyStr)
+	// CSS should be injected to hide matching elements
+	if !strings.Contains(bodyStr, "<style>") {
+		t.Errorf("should contain injected style tag, got:\n%s", bodyStr)
 	}
-	if !strings.Contains(bodyStr, "<!-- ublproxy: replaced .tracking-pixel -->") {
-		t.Errorf("response should contain replacement for .tracking-pixel, got:\n%s", bodyStr)
+	if !strings.Contains(bodyStr, ".ad-banner") {
+		t.Errorf("CSS should contain .ad-banner selector, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, ".tracking-pixel") {
+		t.Errorf("CSS should contain .tracking-pixel selector, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "display: none !important") {
+		t.Errorf("CSS should use display:none, got:\n%s", bodyStr)
 	}
 
-	// The original ad content (script tag, pixel image) should be stripped
-	if strings.Contains(bodyStr, "tracker.js") {
-		t.Errorf("ad content should be stripped, got:\n%s", bodyStr)
-	}
-	if strings.Contains(bodyStr, "pixel.gif") {
-		t.Errorf("tracking pixel should be stripped, got:\n%s", bodyStr)
+	// Content elements should remain in DOM (hidden by CSS, not stripped)
+	if !strings.Contains(bodyStr, "Ad content") {
+		t.Errorf("ad element should remain in DOM (CSS hides it), got:\n%s", bodyStr)
 	}
 
 	// Non-ad content should be preserved
@@ -787,8 +794,11 @@ func TestElementHidingBrotli(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	bodyStr := string(body)
 
-	if !strings.Contains(bodyStr, "<!-- ublproxy: replaced .ad-banner -->") {
-		t.Errorf("brotli HTML should have element replaced, got:\n%s", bodyStr)
+	if !strings.Contains(bodyStr, "<style>") {
+		t.Errorf("brotli HTML should have CSS injected, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, ".ad-banner") {
+		t.Errorf("CSS should contain .ad-banner selector, got:\n%s", bodyStr)
 	}
 	if !strings.Contains(bodyStr, "Hello") {
 		t.Errorf("non-ad content should be preserved, got:\n%s", bodyStr)
@@ -817,8 +827,11 @@ func TestElementHidingHTTPS(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	bodyStr := string(body)
 
-	if !strings.Contains(bodyStr, "<!-- ublproxy: replaced .ad-banner -->") {
-		t.Errorf("HTTPS response should have element replaced, got:\n%s", bodyStr)
+	if !strings.Contains(bodyStr, "<style>") {
+		t.Errorf("HTTPS response should have CSS injected, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, ".ad-banner") {
+		t.Errorf("CSS should contain .ad-banner selector, got:\n%s", bodyStr)
 	}
 	if !strings.Contains(bodyStr, "Hello") {
 		t.Errorf("non-ad content should be preserved, got:\n%s", bodyStr)
@@ -853,15 +866,12 @@ func TestElementHidingNestedContent(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	bodyStr := string(body)
 
-	// All nested content should be stripped
-	if strings.Contains(bodyStr, "ad.js") {
-		t.Errorf("nested script should be stripped, got:\n%s", bodyStr)
+	// Element hiding is CSS-only — container stays in DOM but is hidden
+	if !strings.Contains(bodyStr, "<style>") {
+		t.Errorf("should contain CSS injection, got:\n%s", bodyStr)
 	}
-	if strings.Contains(bodyStr, "ad-network.com") {
-		t.Errorf("nested iframe should be stripped, got:\n%s", bodyStr)
-	}
-	if !strings.Contains(bodyStr, "<!-- ublproxy: replaced .ad-container -->") {
-		t.Errorf("should contain replacement comment, got:\n%s", bodyStr)
+	if !strings.Contains(bodyStr, ".ad-container") {
+		t.Errorf("CSS should contain .ad-container selector, got:\n%s", bodyStr)
 	}
 	if !strings.Contains(bodyStr, "Keep this") {
 		t.Errorf("non-ad content should be preserved, got:\n%s", bodyStr)
@@ -893,23 +903,22 @@ func TestElementHidingVoidElement(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	bodyStr := string(body)
 
-	if strings.Contains(bodyStr, "track.gif") {
-		t.Errorf("void element should be replaced, got:\n%s", bodyStr)
+	// Void element stays in DOM, hidden by CSS
+	if !strings.Contains(bodyStr, "<style>") {
+		t.Errorf("should contain CSS injection, got:\n%s", bodyStr)
 	}
-	if !strings.Contains(bodyStr, "<!-- ublproxy: replaced .tracking-pixel -->") {
-		t.Errorf("should contain replacement comment, got:\n%s", bodyStr)
+	if !strings.Contains(bodyStr, ".tracking-pixel") {
+		t.Errorf("CSS should contain .tracking-pixel selector, got:\n%s", bodyStr)
 	}
 	if !strings.Contains(bodyStr, "Content") {
 		t.Errorf("non-ad content should be preserved, got:\n%s", bodyStr)
 	}
 }
 
-func TestElementHidingComplexFallbackCSS(t *testing.T) {
+func TestElementHidingAllSelectorsCSS(t *testing.T) {
 	rs := blocklist.NewRuleSet()
-	// Complex selector (descendant combinator) — falls back to CSS
-	rs.AddLine("##div .ad-child")
-	// Simple selector — element replacement
-	rs.AddLine("##.ad-banner")
+	rs.AddLine("##div .ad-child") // complex selector
+	rs.AddLine("##.ad-banner")    // simple selector
 
 	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -932,20 +941,23 @@ func TestElementHidingComplexFallbackCSS(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	bodyStr := string(body)
 
-	// Simple selector should be replaced
-	if !strings.Contains(bodyStr, "<!-- ublproxy: replaced .ad-banner -->") {
-		t.Errorf("simple selector should be replaced, got:\n%s", bodyStr)
-	}
-
-	// Complex selector should fall back to CSS injection
+	// Both simple and complex selectors should be in CSS
 	if !strings.Contains(bodyStr, "<style>") {
-		t.Errorf("complex selector should inject style tag, got:\n%s", bodyStr)
+		t.Errorf("should contain injected style tag, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, ".ad-banner") {
+		t.Errorf("CSS should contain simple selector, got:\n%s", bodyStr)
 	}
 	if !strings.Contains(bodyStr, "div .ad-child") {
-		t.Errorf("fallback CSS should contain the complex selector, got:\n%s", bodyStr)
+		t.Errorf("CSS should contain complex selector, got:\n%s", bodyStr)
 	}
 	if !strings.Contains(bodyStr, "display: none !important") {
-		t.Errorf("fallback CSS should use display:none, got:\n%s", bodyStr)
+		t.Errorf("CSS should use display:none, got:\n%s", bodyStr)
+	}
+
+	// Content elements stay in DOM (CSS hides them)
+	if !strings.Contains(bodyStr, `class="ad-banner"`) {
+		t.Errorf("ad element should remain in DOM, got:\n%s", bodyStr)
 	}
 }
 
@@ -974,11 +986,16 @@ func TestElementHidingByID(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	bodyStr := string(body)
 
-	if !strings.Contains(bodyStr, "<!-- ublproxy: replaced #sidebar-ad -->") {
-		t.Errorf("element with matching ID should be replaced, got:\n%s", bodyStr)
+	// ID selector should be in CSS
+	if !strings.Contains(bodyStr, "<style>") {
+		t.Errorf("should contain CSS injection, got:\n%s", bodyStr)
 	}
-	if strings.Contains(bodyStr, "sponsor.html") {
-		t.Errorf("ad content should be stripped, got:\n%s", bodyStr)
+	if !strings.Contains(bodyStr, "#sidebar-ad") {
+		t.Errorf("CSS should contain #sidebar-ad selector, got:\n%s", bodyStr)
+	}
+	// Element stays in DOM, hidden by CSS
+	if !strings.Contains(bodyStr, "sponsor.html") {
+		t.Errorf("ad element should remain in DOM (hidden by CSS), got:\n%s", bodyStr)
 	}
 	if !strings.Contains(bodyStr, "Main") {
 		t.Errorf("non-ad content should be preserved, got:\n%s", bodyStr)
@@ -1010,8 +1027,12 @@ func TestElementHidingAttributeSelector(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	bodyStr := string(body)
 
-	if !strings.Contains(bodyStr, `<!-- ublproxy: replaced div[class*="advertisement"] -->`) {
-		t.Errorf("attribute selector should match, got:\n%s", bodyStr)
+	// Attribute selector should be in CSS
+	if !strings.Contains(bodyStr, `div[class*="advertisement"]`) {
+		t.Errorf("CSS should contain attribute selector, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "display: none !important") {
+		t.Errorf("CSS should use display:none, got:\n%s", bodyStr)
 	}
 	if !strings.Contains(bodyStr, "Keep") {
 		t.Errorf("non-matching content should be preserved, got:\n%s", bodyStr)
@@ -1228,14 +1249,17 @@ func TestScriptStrippingWithElementHiding(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	bodyStr := string(body)
 
-	// Script should be stripped via URL blocking
+	// Script should be stripped via URL blocking (src-based)
 	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
 		t.Errorf("blocked script should be stripped, got:\n%s", bodyStr)
 	}
 
-	// Element hiding should also work
-	if !strings.Contains(bodyStr, "<!-- ublproxy: replaced .ad-banner -->") {
-		t.Errorf("element hiding should still work, got:\n%s", bodyStr)
+	// Element hiding should be CSS-only
+	if !strings.Contains(bodyStr, "<style>") {
+		t.Errorf("should contain CSS injection for element hiding, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, ".ad-banner") {
+		t.Errorf("CSS should contain .ad-banner selector, got:\n%s", bodyStr)
 	}
 
 	if !strings.Contains(bodyStr, "Content") {
@@ -1718,6 +1742,185 @@ func TestAllBlockableElementsTogether(t *testing.T) {
 		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
 	}
 }
+
+// --- Hot-reload tests ---
+
+func TestReloadRulesPicksUpUserRules(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "reload.db")
+	db, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open store: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	// Create a credential and a rule in the database
+	if err := db.SaveCredential("test-cred", []byte("test-pubkey")); err != nil {
+		t.Fatalf("SaveCredential: %v", err)
+	}
+	if _, err := db.CreateRule("test-cred", "/ads/*", ""); err != nil {
+		t.Fatalf("CreateRule: %v", err)
+	}
+
+	caCert, caKey, err := generateCA()
+	if err != nil {
+		t.Fatalf("generateCA: %v", err)
+	}
+	handler := newProxyHandler(newCertCache(caCert, caKey), encodeCertPEM(caCert), nil)
+	handler.store = db
+
+	// Before reload — no rules loaded
+	if rules := handler.getRules(); rules != nil {
+		t.Errorf("before reload: getRules() should be nil, got non-nil")
+	}
+
+	// Reload rules — should pick up the user rule from the database
+	handler.reloadRules()
+
+	rules := handler.getRules()
+	if rules == nil {
+		t.Fatal("after reload: getRules() returned nil")
+	}
+
+	// The rule "/ads/*" should now be loaded
+	ctx := blocklist.MatchContext{}
+	if !rules.ShouldBlockRequest("http://example.com/ads/banner.gif", ctx) {
+		t.Error("after reload: /ads/banner.gif should be blocked")
+	}
+	if rules.ShouldBlockRequest("http://example.com/page.html", ctx) {
+		t.Error("after reload: /page.html should not be blocked")
+	}
+}
+
+func TestReloadRulesIncludesStaticBlocklists(t *testing.T) {
+	// Create a temporary blocklist file
+	tmpDir := t.TempDir()
+	blocklistPath := filepath.Join(tmpDir, "blocklist.txt")
+	os.WriteFile(blocklistPath, []byte("||blocked-host.example.com^\n"), 0644)
+
+	dbPath := filepath.Join(tmpDir, "reload.db")
+	db, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open store: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	// Add a user rule too
+	if err := db.SaveCredential("cred1", []byte("pubkey1")); err != nil {
+		t.Fatalf("SaveCredential: %v", err)
+	}
+	_, err = db.CreateRule("cred1", "##.user-ad", "")
+	if err != nil {
+		t.Fatalf("CreateRule: %v", err)
+	}
+
+	caCert, caKey, err := generateCA()
+	if err != nil {
+		t.Fatalf("generateCA: %v", err)
+	}
+	handler := newProxyHandler(newCertCache(caCert, caKey), encodeCertPEM(caCert), nil)
+	handler.store = db
+	handler.blocklistSources = []string{blocklistPath}
+
+	handler.reloadRules()
+
+	rules := handler.getRules()
+	if rules == nil {
+		t.Fatal("getRules() returned nil after reload")
+	}
+
+	// Static blocklist rule should be loaded
+	if !rules.IsHostBlocked("blocked-host.example.com") {
+		t.Error("static blocklist hostname should be blocked")
+	}
+
+	// User rule should also be loaded (element hiding rule)
+	eh := rules.ElementHidingForDomain("example.com")
+	if eh == nil || eh.CSS == "" {
+		t.Error("user element hiding rule should be loaded")
+	}
+}
+
+func TestAPIRuleMutationTriggersReload(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "callback.db")
+	db, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open store: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	sm := newSessionMap()
+	api := newAPIHandler(db, testAPIConfig, sm)
+
+	var reloadCount atomic.Int32
+	api.onRulesChanged = func() {
+		reloadCount.Add(1)
+	}
+
+	// Create a credential and session for authenticated requests
+	if err := db.SaveCredential("test-cred-cb", []byte("test-pubkey-cb")); err != nil {
+		t.Fatalf("SaveCredential: %v", err)
+	}
+	sess, err := db.CreateSession("test-cred-cb")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	// Create a rule — should trigger reload
+	rec := doRequest(t, api, "POST", "/api/rules", createRuleRequest{Rule: "##.ad", Domain: "example.com"}, sess.Token)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create rule: status %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	// The reload is async (go a.onRulesChanged()), give it a moment
+	// But since we're in a test with a simple counter, it should complete quickly
+	for i := 0; i < 100; i++ {
+		if reloadCount.Load() >= 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if reloadCount.Load() < 1 {
+		t.Error("onRulesChanged should have been called after create")
+	}
+
+	// Extract rule ID for delete/patch
+	var created ruleResponse
+	decodeJSON(t, rec, &created)
+
+	// Patch rule — should trigger reload
+	rec = doRequest(t, api, "PATCH", fmt.Sprintf("/api/rules/%d", created.ID), patchRuleRequest{Enabled: boolPtr(false)}, sess.Token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch rule: status %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	for i := 0; i < 100; i++ {
+		if reloadCount.Load() >= 2 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if reloadCount.Load() < 2 {
+		t.Error("onRulesChanged should have been called after patch")
+	}
+
+	// Delete rule — should trigger reload
+	rec = doRequest(t, api, "DELETE", fmt.Sprintf("/api/rules/%d", created.ID), nil, sess.Token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete rule: status %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	for i := 0; i < 100; i++ {
+		if reloadCount.Load() >= 3 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if reloadCount.Load() < 3 {
+		t.Error("onRulesChanged should have been called after delete")
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
 
 // --- WebSocket test helpers ---
 

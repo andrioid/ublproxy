@@ -5,6 +5,12 @@ import (
 	"sync"
 )
 
+// ElementHiding holds the CSS for hiding ad elements on a specific domain.
+// All selectors are combined into a single display:none stylesheet.
+type ElementHiding struct {
+	CSS string // display:none CSS for all selectors (may be empty)
+}
+
 // ElementHideRule represents a CSS element hiding rule from an adblock filter.
 type ElementHideRule struct {
 	Selector       string   // CSS selector (e.g. ".ad-banner")
@@ -121,10 +127,9 @@ func (idx *elemHideIndex) isExcepted(selector, domain string) bool {
 	return false
 }
 
-// ElementHidingForDomain returns the element hiding data for the given domain,
-// with selectors classified into simple matchers (for element replacement) and
-// a CSS fallback string (for complex selectors). Results are cached.
-// Safe to call on a nil receiver (returns nil).
+// ElementHidingForDomain returns the element hiding CSS for the given domain.
+// All applicable selectors are combined into a single display:none stylesheet.
+// Results are cached. Safe to call on a nil receiver (returns nil).
 func (rs *RuleSet) ElementHidingForDomain(domain string) *ElementHiding {
 	if rs == nil || rs.elemHideIdx == nil {
 		return nil
@@ -142,8 +147,7 @@ func (rs *RuleSet) ElementHidingForDomain(domain string) *ElementHiding {
 }
 
 func (rs *RuleSet) computeElementHiding(domain string) *ElementHiding {
-	var matchers []SelectorMatch
-	var allSelectors []string
+	var selectors []string
 
 	for _, rule := range rs.elemHideRules {
 		if rule.Exception || !rule.appliesTo(domain) {
@@ -152,22 +156,13 @@ func (rs *RuleSet) computeElementHiding(domain string) *ElementHiding {
 		if rs.elemHideIdx.isExcepted(rule.Selector, domain) {
 			continue
 		}
-
-		allSelectors = append(allSelectors, rule.Selector)
-
-		if sm := ClassifySelector(rule.Selector); sm != nil {
-			matchers = append(matchers, *sm)
-		}
+		selectors = append(selectors, rule.Selector)
 	}
 
-	if len(allSelectors) == 0 {
+	if len(selectors) == 0 {
 		return nil
 	}
 
-	css := strings.Join(allSelectors, ",\n") + " {\n  display: none !important;\n}\n"
-
-	return &ElementHiding{
-		Matchers: matchers,
-		CSS:      css,
-	}
+	css := strings.Join(selectors, ",\n") + " {\n  display: none !important;\n}\n"
+	return &ElementHiding{CSS: css}
 }
