@@ -16,25 +16,39 @@ import (
 )
 
 type proxyHandler struct {
-	certs        *certCache
-	caCertPEM    []byte
-	rules        atomic.Pointer[blocklist.RuleSet]
-	transport    *http.Transport
-	store        *store.Store
-	api          *apiHandler
-	sessions     *sessionMap
+	certs     *certCache
+	caCertPEM []byte
+	transport *http.Transport
+	store     *store.Store
+	api       *apiHandler
+	sessions  *sessionMap
+
 	portalOrigin string
 
+	// baselineRules are the always-active rules loaded from --blocklist
+	// sources and --default-subscription lists. These apply to all traffic
+	// regardless of user.
+	baselineRules atomic.Pointer[blocklist.RuleSet]
+
+	// userRules caches per-user RuleSets keyed by credential ID. Each
+	// user's RuleSet contains their custom rules and subscription lists.
+	// Loaded lazily on first proxied request for that user.
+	userRules sync.Map // credential ID -> *blocklist.RuleSet
+
 	// blocklistSources are the static blocklist file paths/URLs loaded at
-	// startup. Needed to rebuild the RuleSet when user rules change.
+	// startup (from CLI --blocklist flags).
 	blocklistSources []string
 
-	// reloadMu serializes rule reloads to prevent concurrent rebuilds.
+	// defaultSubscriptions are the default blocklist subscription URLs
+	// (from CLI --default-subscription flags or the built-in defaults).
+	defaultSubscriptions []string
+
+	// reloadMu serializes baseline rule reloads to prevent concurrent rebuilds.
 	reloadMu sync.Mutex
 }
 
-func newProxyHandler(certs *certCache, caCertPEM []byte, rules *blocklist.RuleSet) *proxyHandler {
-	p := &proxyHandler{
+func newProxyHandler(certs *certCache, caCertPEM []byte) *proxyHandler {
+	return &proxyHandler{
 		certs:     certs,
 		caCertPEM: caCertPEM,
 		// Force HTTP/1.1 upstream. Go's default HTTP/2 support causes hangs
@@ -46,63 +60,157 @@ func newProxyHandler(certs *certCache, caCertPEM []byte, rules *blocklist.RuleSe
 			IdleConnTimeout:       90 * time.Second,
 		},
 	}
-	if rules != nil {
-		p.rules.Store(rules)
-	}
-	return p
 }
 
-// getRules returns the current RuleSet, or nil if none is loaded.
-func (p *proxyHandler) getRules() *blocklist.RuleSet {
-	return p.rules.Load()
+// getBaselineRules returns the baseline RuleSet, or nil if none is loaded.
+func (p *proxyHandler) getBaselineRules() *blocklist.RuleSet {
+	return p.baselineRules.Load()
+}
+
+// getUserRules returns the cached per-user RuleSet for the given credential,
+// loading it lazily from the database on first access. Returns nil if the
+// user has no custom rules or subscriptions, or if the store is unavailable.
+func (p *proxyHandler) getUserRules(credentialID string) *blocklist.RuleSet {
+	if credentialID == "" || p.store == nil {
+		return nil
+	}
+
+	if cached, ok := p.userRules.Load(credentialID); ok {
+		return cached.(*blocklist.RuleSet)
+	}
+
+	rs := p.loadUserRules(credentialID)
+	p.userRules.Store(credentialID, rs)
+	return rs
+}
+
+// loadUserRules builds a RuleSet from a user's DB rules and subscriptions.
+func (p *proxyHandler) loadUserRules(credentialID string) *blocklist.RuleSet {
+	rs := blocklist.NewRuleSet()
+
+	subURLs, err := p.store.ListEnabledSubscriptionURLs(credentialID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "user-rules: failed to load subscriptions for %s: %v\n", credentialID, err)
+	} else {
+		for _, url := range subURLs {
+			if err := p.loadBlocklistSource(rs, url); err != nil {
+				fmt.Fprintf(os.Stderr, "user-rules: failed to load subscription %s: %v\n", url, err)
+			}
+		}
+	}
+
+	dbRules, err := p.store.ListEnabledRules(credentialID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "user-rules: failed to load rules for %s: %v\n", credentialID, err)
+	} else {
+		for _, r := range dbRules {
+			rs.AddLine(r.Rule)
+		}
+	}
+
+	return rs
+}
+
+// invalidateUserRules evicts the cached RuleSet for a user so it will be
+// reloaded from the database on the next proxied request.
+func (p *proxyHandler) invalidateUserRules(credentialID string) {
+	p.userRules.Delete(credentialID)
+}
+
+// credentialForIP returns the credential ID for the authenticated session
+// on the given client IP, or empty string if not authenticated.
+func (p *proxyHandler) credentialForIP(clientIP string) string {
+	if p.sessions == nil {
+		return ""
+	}
+	entry := p.sessions.Get(clientIP)
+	if entry == nil {
+		return ""
+	}
+	return entry.CredentialID
+}
+
+// shouldBlock checks whether a URL should be blocked, applying layered
+// evaluation: user exceptions override baseline blocks, then user blocks
+// are checked, then baseline blocks.
+func (p *proxyHandler) shouldBlock(clientIP, url string, ctx blocklist.MatchContext) bool {
+	baseline := p.getBaselineRules()
+	credID := p.credentialForIP(clientIP)
+	userRS := p.getUserRules(credID)
+
+	// User exception overrides baseline block
+	if userRS != nil && userRS.MatchesException(url, ctx) {
+		return false
+	}
+
+	// User-specific block
+	if userRS != nil && userRS.ShouldBlockRequest(url, ctx) {
+		return true
+	}
+
+	// Baseline block
+	if baseline != nil && baseline.ShouldBlockRequest(url, ctx) {
+		return true
+	}
+
+	return false
+}
+
+// shouldBlockHost checks whether a host should be blocked at the CONNECT
+// level, applying layered evaluation like shouldBlock.
+func (p *proxyHandler) shouldBlockHost(clientIP, host string) bool {
+	baseline := p.getBaselineRules()
+	credID := p.credentialForIP(clientIP)
+	userRS := p.getUserRules(credID)
+
+	// User exception overrides baseline block
+	if userRS != nil && userRS.MatchesExceptionHost(host) {
+		return false
+	}
+
+	// User-specific block
+	if userRS != nil && userRS.IsHostBlocked(host) {
+		return true
+	}
+
+	// Baseline block
+	if baseline != nil && baseline.IsHostBlocked(host) {
+		return true
+	}
+
+	return false
 }
 
 // blocklistCacheTTL is how long a cached blocklist download is considered
 // fresh. Stale entries are re-downloaded on next reload.
 const blocklistCacheTTL = 24 * time.Hour
 
-// reloadRules rebuilds the in-memory RuleSet from static blocklists,
-// user-subscribed blocklists, and user-created rules. Remote URLs are
-// cached in the database to avoid re-downloading on every rule change.
-func (p *proxyHandler) reloadRules() {
+// reloadBaseline rebuilds the baseline RuleSet from --blocklist sources
+// and --default-subscription URLs. Remote URLs are cached in the database
+// to avoid re-downloading on every reload. This does not include per-user
+// rules — those are loaded lazily via getUserRules.
+func (p *proxyHandler) reloadBaseline() {
 	p.reloadMu.Lock()
 	defer p.reloadMu.Unlock()
 
 	rs := blocklist.NewRuleSet()
 
-	// Reload static blocklists (CLI --blocklist flags)
+	// Load static blocklists (CLI --blocklist flags)
 	for _, src := range p.blocklistSources {
 		if err := p.loadBlocklistSource(rs, src); err != nil {
-			fmt.Fprintf(os.Stderr, "reload: failed to load blocklist %s: %v\n", src, err)
+			fmt.Fprintf(os.Stderr, "baseline: failed to load blocklist %s: %v\n", src, err)
 		}
 	}
 
-	if p.store != nil {
-		// Load user-subscribed blocklist URLs
-		subURLs, err := p.store.ListAllEnabledSubscriptionURLs()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "reload: failed to load subscription urls: %v\n", err)
-		} else {
-			for _, url := range subURLs {
-				if err := p.loadBlocklistSource(rs, url); err != nil {
-					fmt.Fprintf(os.Stderr, "reload: failed to load subscription %s: %v\n", url, err)
-				}
-			}
-		}
-
-		// Add user-created rules from the database
-		dbRules, err := p.store.ListAllEnabledRules()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "reload: failed to load user rules: %v\n", err)
-		} else {
-			for _, r := range dbRules {
-				rs.AddLine(r.Rule)
-			}
+	// Load default subscription URLs (EasyList, EasyPrivacy, etc.)
+	for _, url := range p.defaultSubscriptions {
+		if err := p.loadBlocklistSource(rs, url); err != nil {
+			fmt.Fprintf(os.Stderr, "baseline: failed to load subscription %s: %v\n", url, err)
 		}
 	}
 
-	// Atomic swap — all concurrent readers immediately see the new rules
-	p.rules.Store(rs)
+	p.baselineRules.Store(rs)
+	fmt.Fprintf(os.Stderr, "baseline: loaded %d hostnames, %d URL rules\n", rs.HostCount(), rs.RuleCount())
 }
 
 // loadBlocklistSource loads a blocklist from a file path or URL into the

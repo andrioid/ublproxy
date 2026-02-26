@@ -13,7 +13,7 @@ import (
 
 func TestBootstrapScriptTagWithSession(t *testing.T) {
 	sm := newSessionMap()
-	sm.Set("192.168.1.10", "test-token-abc")
+	sm.Set("192.168.1.10", sessionEntry{Token: "test-token-abc", CredentialID: "cred-1"})
 
 	p := &proxyHandler{
 		sessions:     sm,
@@ -69,7 +69,7 @@ func TestBootstrapScriptTagNoSessionMap(t *testing.T) {
 
 func TestScriptInjectionInHTML(t *testing.T) {
 	sm := newSessionMap()
-	sm.Set("127.0.0.1", "my-token")
+	sm.Set("127.0.0.1", sessionEntry{Token: "my-token", CredentialID: "cred-1"})
 
 	p := &proxyHandler{
 		sessions:     sm,
@@ -130,7 +130,7 @@ func TestNoScriptInjectionWithoutSession(t *testing.T) {
 
 func TestNoScriptInjectionForNonHTML(t *testing.T) {
 	sm := newSessionMap()
-	sm.Set("127.0.0.1", "my-token")
+	sm.Set("127.0.0.1", sessionEntry{Token: "my-token", CredentialID: "cred-1"})
 
 	p := &proxyHandler{
 		sessions:     sm,
@@ -151,7 +151,7 @@ func TestNoScriptInjectionForNonHTML(t *testing.T) {
 
 func TestScriptInjectionWithGzip(t *testing.T) {
 	sm := newSessionMap()
-	sm.Set("127.0.0.1", "gzip-token")
+	sm.Set("127.0.0.1", sessionEntry{Token: "gzip-token", CredentialID: "cred-1"})
 
 	p := &proxyHandler{
 		sessions:     sm,
@@ -186,7 +186,7 @@ func TestScriptInjectionWithGzip(t *testing.T) {
 
 func TestScriptInjectionWithRules(t *testing.T) {
 	sm := newSessionMap()
-	sm.Set("127.0.0.1", "rules-token")
+	sm.Set("127.0.0.1", sessionEntry{Token: "rules-token", CredentialID: "cred-1"})
 
 	rs := blocklist.NewRuleSet()
 	rs.AddLine("##.ad-banner")
@@ -195,7 +195,7 @@ func TestScriptInjectionWithRules(t *testing.T) {
 		sessions:     sm,
 		portalOrigin: "https://127.0.0.1:8443",
 	}
-	p.rules.Store(rs)
+	p.baselineRules.Store(rs)
 
 	htmlBody := `<html><head></head><body><div class="ad-banner">Ad</div><p>Content</p></body></html>`
 	resp := &http.Response{
@@ -234,30 +234,30 @@ func TestSessionMap(t *testing.T) {
 	sm := newSessionMap()
 
 	// Get from empty map
-	if got := sm.Get("1.2.3.4"); got != "" {
-		t.Errorf("Get empty = %q, want empty", got)
+	if got := sm.Get("1.2.3.4"); got != nil {
+		t.Errorf("Get empty = %v, want nil", got)
 	}
 
 	// Set and get
-	sm.Set("1.2.3.4", "token-a")
-	if got := sm.Get("1.2.3.4"); got != "token-a" {
-		t.Errorf("Get = %q, want %q", got, "token-a")
+	sm.Set("1.2.3.4", sessionEntry{Token: "token-a", CredentialID: "cred-1"})
+	if got := sm.Get("1.2.3.4"); got == nil || got.Token != "token-a" || got.CredentialID != "cred-1" {
+		t.Errorf("Get = %v, want token-a/cred-1", got)
 	}
 
 	// Overwrite
-	sm.Set("1.2.3.4", "token-b")
-	if got := sm.Get("1.2.3.4"); got != "token-b" {
-		t.Errorf("Get after overwrite = %q, want %q", got, "token-b")
+	sm.Set("1.2.3.4", sessionEntry{Token: "token-b", CredentialID: "cred-2"})
+	if got := sm.Get("1.2.3.4"); got == nil || got.Token != "token-b" || got.CredentialID != "cred-2" {
+		t.Errorf("Get after overwrite = %v, want token-b/cred-2", got)
 	}
 
 	// Different IP
-	if got := sm.Get("5.6.7.8"); got != "" {
-		t.Errorf("Get different IP = %q, want empty", got)
+	if got := sm.Get("5.6.7.8"); got != nil {
+		t.Errorf("Get different IP = %v, want nil", got)
 	}
 
 	// Delete
 	sm.Delete("1.2.3.4")
-	if got := sm.Get("1.2.3.4"); got != "" {
-		t.Errorf("Get after delete = %q, want empty", got)
+	if got := sm.Get("1.2.3.4"); got != nil {
+		t.Errorf("Get after delete = %v, want nil", got)
 	}
 }

@@ -33,8 +33,9 @@ type apiHandler struct {
 	sessions    *sessionMap
 
 	// onRulesChanged is called after any rule mutation (create/delete/patch)
-	// to trigger a hot-reload of the in-memory RuleSet.
-	onRulesChanged func()
+	// to invalidate the cached per-user RuleSet. The argument is the
+	// credential ID whose rules changed.
+	onRulesChanged func(credentialID string)
 
 	// challenges stores pending WebAuthn challenges keyed by base64url
 	// challenge value. Challenges are single-use and expire after challengeTTL.

@@ -37,11 +37,13 @@ var srcBlockableTags = map[string]string{
 }
 
 // srcBlockContext carries the page context needed to resolve relative src
-// attributes and check them against URL blocking rules.
+// attributes and check them against URL blocking rules. Uses the proxy's
+// layered shouldBlock for per-user rule evaluation.
 type srcBlockContext struct {
-	scheme string
-	host   string
-	rules  *blocklist.RuleSet
+	scheme   string
+	host     string
+	proxy    *proxyHandler
+	clientIP string
 }
 
 // resolveSrc resolves an element's src attribute to an absolute URL.
@@ -77,19 +79,27 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 		return nil, false
 	}
 
-	var eh *blocklist.ElementHiding
-	var hasURLRules bool
-	rules := p.getRules()
-	if rules != nil {
-		eh = rules.ElementHidingForDomain(host)
-		hasURLRules = rules.HostCount() > 0 || rules.RuleCount() > 0
+	baseline := p.getBaselineRules()
+	credID := p.credentialForIP(clientIP)
+	userRS := p.getUserRules(credID)
+
+	// Merge element hiding from baseline and user rules
+	var baselineEH, userEH *blocklist.ElementHiding
+	if baseline != nil {
+		baselineEH = baseline.ElementHidingForDomain(host)
 	}
+	if userRS != nil {
+		userEH = userRS.ElementHidingForDomain(host)
+	}
+
+	hasURLRules := (baseline != nil && (baseline.HostCount() > 0 || baseline.RuleCount() > 0)) ||
+		(userRS != nil && (userRS.HostCount() > 0 || userRS.RuleCount() > 0))
 
 	// Generate bootstrap script tag (empty string if no session)
 	scriptTag := p.bootstrapScriptTag(clientIP, host)
 
 	// Nothing to do if there are no rules AND no script to inject
-	if eh == nil && !hasURLRules && scriptTag == "" {
+	if baselineEH == nil && userEH == nil && !hasURLRules && scriptTag == "" {
 		return nil, false
 	}
 
@@ -116,12 +126,15 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 		return nil, false
 	}
 
-	sc := srcBlockContext{scheme: "https", host: host, rules: rules}
+	// For src-based resource stripping, use the layered shouldBlock
+	// approach via a proxy-aware srcBlockContext.
+	sc := srcBlockContext{scheme: "https", host: host, proxy: p, clientIP: clientIP}
 	modified := stripBlockedResources(body, sc)
 
-	if eh != nil && eh.CSS != "" {
-		// Sanitize CSS to prevent XSS via </style> injection
-		safeCSS := styleCloseRe.ReplaceAllString(eh.CSS, `<\/style`)
+	// Merge baseline + user element hiding CSS, applying user #@# exceptions
+	css := mergeElementHidingCSS(baselineEH, userEH, userRS, host)
+	if css != "" {
+		safeCSS := styleCloseRe.ReplaceAllString(css, `<\/style`)
 		styleTag := []byte("<style>" + safeCSS + "</style>")
 		modified = injectStyleTag(modified, styleTag)
 	}
@@ -136,6 +149,34 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 	resp.Header.Del("Content-Encoding")
 
 	return modified, true
+}
+
+// mergeElementHidingCSS combines element hiding selectors from baseline and
+// user RuleSets for a specific domain. User #@# exception rules suppress
+// matching baseline ## selectors. Returns empty string if no CSS to inject.
+func mergeElementHidingCSS(baseline, user *blocklist.ElementHiding, userRS *blocklist.RuleSet, domain string) string {
+	var selectors []string
+
+	// Add baseline selectors, filtering out any excepted by user #@# rules
+	if baseline != nil {
+		for _, sel := range baseline.Selectors {
+			if userRS != nil && userRS.IsElementHideExcepted(sel, domain) {
+				continue
+			}
+			selectors = append(selectors, sel)
+		}
+	}
+
+	// Add user selectors (their own internal exceptions already applied)
+	if user != nil {
+		selectors = append(selectors, user.Selectors...)
+	}
+
+	if len(selectors) == 0 {
+		return ""
+	}
+
+	return strings.Join(selectors, ",\n") + " {\n  display: none !important;\n}\n"
 }
 
 // injectBeforeClose inserts content before the first found closing tag,
@@ -154,7 +195,7 @@ func injectBeforeClose(htmlDoc, content []byte, tags ...[]byte) []byte {
 // resolves to a blocked address. Other elements are passed through unchanged —
 // element hiding for those is handled by CSS injection only.
 func stripBlockedResources(src []byte, sc srcBlockContext) []byte {
-	if sc.rules == nil {
+	if sc.proxy == nil {
 		return src
 	}
 
@@ -198,7 +239,7 @@ func stripBlockedResources(src []byte, sc srcBlockContext) []byte {
 
 			resolved := sc.resolveSrc(urlVal)
 			ctx := blocklist.MatchContext{PageDomain: sc.host}
-			if !sc.rules.ShouldBlockRequest(resolved, ctx) {
+			if !sc.proxy.shouldBlock(sc.clientIP, resolved, ctx) {
 				buf.Write(rawBytes)
 				continue
 			}

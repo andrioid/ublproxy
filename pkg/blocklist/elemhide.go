@@ -8,7 +8,8 @@ import (
 // ElementHiding holds the CSS for hiding ad elements on a specific domain.
 // All selectors are combined into a single display:none stylesheet.
 type ElementHiding struct {
-	CSS string // display:none CSS for all selectors (may be empty)
+	CSS       string   // display:none CSS for all selectors (may be empty)
+	Selectors []string // individual CSS selectors before joining
 }
 
 // ElementHideRule represents a CSS element hiding rule from an adblock filter.
@@ -164,5 +165,5 @@ func (rs *RuleSet) computeElementHiding(domain string) *ElementHiding {
 	}
 
 	css := strings.Join(selectors, ",\n") + " {\n  display: none !important;\n}\n"
-	return &ElementHiding{CSS: css}
+	return &ElementHiding{CSS: css, Selectors: selectors}
 }

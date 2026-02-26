@@ -67,6 +67,37 @@ func (s *Store) ListRules(credentialID string) ([]Rule, error) {
 	return rules, rows.Err()
 }
 
+// ListEnabledRules returns all enabled rules for a single credential.
+// Used when building a per-user RuleSet.
+func (s *Store) ListEnabledRules(credentialID string) ([]Rule, error) {
+	rows, err := s.db.Query(
+		"SELECT id, credential_id, rule, domain, enabled, created_at FROM rules WHERE credential_id = ? AND enabled = 1",
+		credentialID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list enabled rules: %w", err)
+	}
+	defer rows.Close()
+
+	var rules []Rule
+	for rows.Next() {
+		var r Rule
+		var createdAt string
+		var enabled int
+		if err := rows.Scan(&r.ID, &r.CredentialID, &r.Rule, &r.Domain, &enabled, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan rule: %w", err)
+		}
+		r.Enabled = enabled != 0
+		var parseErr error
+		r.CreatedAt, parseErr = time.Parse("2006-01-02 15:04:05", createdAt)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse created_at: %w", parseErr)
+		}
+		rules = append(rules, r)
+	}
+	return rules, rows.Err()
+}
+
 // ListAllEnabledRules returns all enabled rules across all credentials.
 // Used when rebuilding the in-memory RuleSet.
 func (s *Store) ListAllEnabledRules() ([]Rule, error) {

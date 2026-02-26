@@ -56,7 +56,10 @@ func startTestEnv(t *testing.T, upstreamHandler http.Handler, rules *blocklist.R
 
 	certs := newCertCache(caCert, caKey)
 	caCertPEM := encodeCertPEM(caCert)
-	handler := newProxyHandler(certs, caCertPEM, rules)
+	handler := newProxyHandler(certs, caCertPEM)
+	if rules != nil {
+		handler.baselineRules.Store(rules)
+	}
 
 	// Trust the test HTTPS server's certificate so the proxy can validate
 	// upstream TLS connections (proxy validates upstream certs in production)
@@ -1781,7 +1784,7 @@ func TestAllBlockableElementsTogether(t *testing.T) {
 
 // --- Hot-reload tests ---
 
-func TestReloadRulesPicksUpUserRules(t *testing.T) {
+func TestGetUserRulesLoadsFromDB(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "reload.db")
 	db, err := store.Open(dbPath)
 	if err != nil {
@@ -1801,33 +1804,36 @@ func TestReloadRulesPicksUpUserRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateCA: %v", err)
 	}
-	handler := newProxyHandler(newCertCache(caCert, caKey), encodeCertPEM(caCert), nil)
+	handler := newProxyHandler(newCertCache(caCert, caKey), encodeCertPEM(caCert))
 	handler.store = db
 
-	// Before reload — no rules loaded
-	if rules := handler.getRules(); rules != nil {
-		t.Errorf("before reload: getRules() should be nil, got non-nil")
-	}
-
-	// Reload rules — should pick up the user rule from the database
-	handler.reloadRules()
-
-	rules := handler.getRules()
+	// No user rules cached yet — getUserRules lazily loads them
+	rules := handler.getUserRules("test-cred")
 	if rules == nil {
-		t.Fatal("after reload: getRules() returned nil")
+		t.Fatal("getUserRules returned nil")
 	}
 
 	// The rule "/ads/*" should now be loaded
 	ctx := blocklist.MatchContext{}
 	if !rules.ShouldBlockRequest("http://example.com/ads/banner.gif", ctx) {
-		t.Error("after reload: /ads/banner.gif should be blocked")
+		t.Error("/ads/banner.gif should be blocked by user rules")
 	}
 	if rules.ShouldBlockRequest("http://example.com/page.html", ctx) {
-		t.Error("after reload: /page.html should not be blocked")
+		t.Error("/page.html should not be blocked")
+	}
+
+	// Invalidate and verify re-load works
+	handler.invalidateUserRules("test-cred")
+	rules2 := handler.getUserRules("test-cred")
+	if rules2 == nil {
+		t.Fatal("getUserRules returned nil after invalidation")
+	}
+	if !rules2.ShouldBlockRequest("http://example.com/ads/banner.gif", ctx) {
+		t.Error("re-loaded rules should still block /ads/*")
 	}
 }
 
-func TestReloadRulesIncludesStaticBlocklists(t *testing.T) {
+func TestReloadBaselineAndUserRulesSeparate(t *testing.T) {
 	// Create a temporary blocklist file
 	tmpDir := t.TempDir()
 	blocklistPath := filepath.Join(tmpDir, "blocklist.txt")
@@ -1840,7 +1846,7 @@ func TestReloadRulesIncludesStaticBlocklists(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	// Add a user rule too
+	// Add a user rule
 	if err := db.SaveCredential("cred1", []byte("pubkey1")); err != nil {
 		t.Fatalf("SaveCredential: %v", err)
 	}
@@ -1853,26 +1859,37 @@ func TestReloadRulesIncludesStaticBlocklists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateCA: %v", err)
 	}
-	handler := newProxyHandler(newCertCache(caCert, caKey), encodeCertPEM(caCert), nil)
+	handler := newProxyHandler(newCertCache(caCert, caKey), encodeCertPEM(caCert))
 	handler.store = db
 	handler.blocklistSources = []string{blocklistPath}
 
-	handler.reloadRules()
+	// Reload baseline — should load static blocklist but NOT user rules
+	handler.reloadBaseline()
 
-	rules := handler.getRules()
-	if rules == nil {
-		t.Fatal("getRules() returned nil after reload")
+	baseline := handler.getBaselineRules()
+	if baseline == nil {
+		t.Fatal("getBaselineRules() returned nil after reloadBaseline")
 	}
 
-	// Static blocklist rule should be loaded
-	if !rules.IsHostBlocked("blocked-host.example.com") {
-		t.Error("static blocklist hostname should be blocked")
+	// Static blocklist rule should be in baseline
+	if !baseline.IsHostBlocked("blocked-host.example.com") {
+		t.Error("static blocklist hostname should be blocked in baseline")
 	}
 
-	// User rule should also be loaded (element hiding rule)
-	eh := rules.ElementHidingForDomain("example.com")
+	// User element hiding rule should NOT be in baseline
+	eh := baseline.ElementHidingForDomain("example.com")
+	if eh != nil && eh.CSS != "" {
+		t.Error("user element hiding rule should NOT be in baseline")
+	}
+
+	// User rules should be loadable separately
+	userRules := handler.getUserRules("cred1")
+	if userRules == nil {
+		t.Fatal("getUserRules returned nil")
+	}
+	eh = userRules.ElementHidingForDomain("example.com")
 	if eh == nil || eh.CSS == "" {
-		t.Error("user element hiding rule should be loaded")
+		t.Error("user element hiding rule should be loaded in user rules")
 	}
 }
 
@@ -1888,7 +1905,7 @@ func TestAPIRuleMutationTriggersReload(t *testing.T) {
 	api := newAPIHandler(db, testAPIConfig, sm)
 
 	var reloadCount atomic.Int32
-	api.onRulesChanged = func() {
+	api.onRulesChanged = func(credentialID string) {
 		reloadCount.Add(1)
 	}
 

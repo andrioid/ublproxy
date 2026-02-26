@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ublproxy/pkg/blocklist"
 	"ublproxy/pkg/store"
 	"ublproxy/pkg/webauthn"
 )
@@ -39,7 +38,18 @@ func main() {
 	var blocklistSources stringSlice
 	flag.Var(&blocklistSources, "blocklist", "path or URL to a blocklist file (can be specified multiple times)")
 
+	var defaultSubs stringSlice
+	flag.Var(&defaultSubs, "default-subscription", "default blocklist subscription URL, always active for all users (can be specified multiple times; defaults to EasyList + EasyPrivacy if none specified)")
+
 	flag.Parse()
+
+	// Built-in defaults if no --default-subscription flags were given
+	if len(defaultSubs) == 0 {
+		defaultSubs = stringSlice{
+			"https://easylist.to/easylist/easylist.txt",
+			"https://easylist.to/easylist/easyprivacy.txt",
+		}
+	}
 
 	caCert, caKey, err := loadOrGenerateCA(*caDir)
 	if err != nil {
@@ -47,28 +57,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	var rules *blocklist.RuleSet
-	if len(blocklistSources) > 0 {
-		rules = blocklist.NewRuleSet()
-		for _, src := range blocklistSources {
-			var loadErr error
-			if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
-				fmt.Fprintf(os.Stderr, "Fetching %s\n", src)
-				loadErr = rules.LoadURL(src)
-			} else {
-				loadErr = rules.LoadFile(src)
-			}
-			if loadErr != nil {
-				fmt.Fprintf(os.Stderr, "failed to load blocklist: %v\n", loadErr)
-				os.Exit(1)
-			}
-		}
-		fmt.Fprintf(os.Stderr, "Loaded %d blocked hostnames, %d URL rules\n", rules.HostCount(), rules.RuleCount())
-	}
-
 	certs := newCertCache(caCert, caKey)
 	caCertPEM := encodeCertPEM(caCert)
-	handler := newProxyHandler(certs, caCertPEM, rules)
+	handler := newProxyHandler(certs, caCertPEM)
+	handler.blocklistSources = blocklistSources
+	handler.defaultSubscriptions = defaultSubs
 
 	// Open SQLite database for credential/session/rule storage
 	db, err := store.Open(*dbPath)
@@ -78,7 +71,6 @@ func main() {
 	}
 	defer db.Close()
 	handler.store = db
-	handler.blocklistSources = blocklistSources
 
 	// Configure WebAuthn with the portal hostname. WebAuthn requires a
 	// domain name as RP ID — IP addresses are not allowed by the spec.
@@ -91,10 +83,14 @@ func main() {
 
 	sm := newSessionMap()
 	api := newAPIHandler(db, webauthnCfg, sm)
-	api.onRulesChanged = handler.reloadRules
+	api.onRulesChanged = handler.invalidateUserRules
 	handler.api = api
 	handler.sessions = sm
 	handler.portalOrigin = portalOrigin
+
+	// Load baseline rules (--blocklist + --default-subscription) at startup.
+	// This runs synchronously so rules are ready before traffic arrives.
+	handler.reloadBaseline()
 
 	// Auto-detect LAN IP for the portal TLS cert so it covers both the
 	// hostname and the LAN IP (useful for CA cert download, etc.)

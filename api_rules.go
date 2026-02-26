@@ -81,7 +81,7 @@ func (a *apiHandler) handleCreateRule(w http.ResponseWriter, r *http.Request, se
 		return
 	}
 
-	a.triggerReload()
+	a.triggerReload(sess.CredentialID)
 	writeJSON(w, http.StatusCreated, toRuleResponse(*rule))
 }
 
@@ -97,7 +97,7 @@ func (a *apiHandler) handleDeleteRule(w http.ResponseWriter, r *http.Request, pa
 		return
 	}
 
-	a.triggerReload()
+	a.triggerReload(sess.CredentialID)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -128,12 +128,13 @@ func (a *apiHandler) handlePatchRule(w http.ResponseWriter, r *http.Request, pat
 		return
 	}
 
-	a.triggerReload()
+	a.triggerReload(sess.CredentialID)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// triggerReload calls the onRulesChanged callback if set.
-func (a *apiHandler) triggerReload() {
+// triggerReload calls the onRulesChanged callback if set, passing the
+// credential ID whose rules changed so only that user's cache is invalidated.
+func (a *apiHandler) triggerReload(credentialID string) {
 	if a.onRulesChanged != nil {
 		go func() {
 			defer func() {
@@ -141,7 +142,7 @@ func (a *apiHandler) triggerReload() {
 					fmt.Fprintf(os.Stderr, "panic in onRulesChanged: %v\n", r)
 				}
 			}()
-			a.onRulesChanged()
+			a.onRulesChanged(credentialID)
 		}()
 	}
 }

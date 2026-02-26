@@ -229,6 +229,42 @@ func TestRuleSetExceptionHostname(t *testing.T) {
 	}
 }
 
+func TestMatchesException(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddException("@@||safe.example.com^")
+	rs.AddException("@@/ads/acceptable*")
+
+	// Hostname-level exception
+	if !rs.MatchesException("https://safe.example.com/page", blocklist.MatchContext{}) {
+		t.Error("should match hostname exception")
+	}
+	// Path-level exception
+	if !rs.MatchesException("https://example.com/ads/acceptable-banner.png", blocklist.MatchContext{}) {
+		t.Error("should match path exception")
+	}
+	// No exception for unrelated URL
+	if rs.MatchesException("https://ads.example.com/tracker.js", blocklist.MatchContext{}) {
+		t.Error("should not match unrelated URL")
+	}
+	// Nil receiver
+	var nilRS *blocklist.RuleSet
+	if nilRS.MatchesException("https://safe.example.com/", blocklist.MatchContext{}) {
+		t.Error("nil receiver should return false")
+	}
+}
+
+func TestMatchesExceptionHost(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddException("@@||safe.example.com^")
+
+	if !rs.MatchesExceptionHost("safe.example.com") {
+		t.Error("should match excepted host")
+	}
+	if rs.MatchesExceptionHost("ads.example.com") {
+		t.Error("should not match non-excepted host")
+	}
+}
+
 func TestRuleSetLoadFileWithExceptions(t *testing.T) {
 	content := `||ads.example.com^
 /tracking.js

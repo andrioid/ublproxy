@@ -17,8 +17,8 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 		host = r.Host
 		port = "443"
 	}
-	rules := p.getRules()
-	if rules != nil && rules.IsHostBlocked(host) {
+	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if p.shouldBlockHost(clientIP, host) {
 		http.Error(w, "blocked", http.StatusForbidden)
 		return
 	}
@@ -85,8 +85,7 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port, clientI
 		// URL-level blocking for pattern rules (hostname was already
 		// checked at CONNECT time; this catches path-specific rules)
 		ctx := matchContextFromRequest(req)
-		rules := p.getRules()
-		if rules != nil && rules.ShouldBlockRequest(targetURL, ctx) {
+		if p.shouldBlock(clientIP, targetURL, ctx) {
 			req.Body.Close()
 			blocked := &http.Response{
 				StatusCode: http.StatusNoContent,

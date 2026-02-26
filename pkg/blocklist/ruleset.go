@@ -309,6 +309,56 @@ func (rs *RuleSet) isHostBlocked(host string) bool {
 	}
 }
 
+// MatchesException returns true if the URL matches any exception rule (@@)
+// in this RuleSet. This is used for per-user exception checking where user
+// exceptions need to override baseline blocking rules.
+// Safe to call on a nil receiver (returns false).
+func (rs *RuleSet) MatchesException(rawURL string, ctx MatchContext) bool {
+	if rs == nil {
+		return false
+	}
+
+	lowerURL := strings.ToLower(rawURL)
+	lowerCtx := MatchContext{
+		PageDomain:   strings.ToLower(ctx.PageDomain),
+		ResourceType: ctx.ResourceType,
+	}
+	host := extractHostFromURL(lowerURL)
+
+	if rs.matchDomainIndexed(rs.domainExc, host, rawURL, lowerURL, lowerCtx) {
+		return true
+	}
+	for _, exc := range rs.exceptions {
+		if exc.matchWithContextLower(rawURL, lowerURL, lowerCtx) {
+			return true
+		}
+	}
+	return false
+}
+
+// MatchesExceptionHost returns true if the hostname matches any hostname-level
+// exception rule (@@||hostname^). Used at CONNECT time where only the host is
+// known. Safe to call on a nil receiver (returns false).
+func (rs *RuleSet) MatchesExceptionHost(host string) bool {
+	if rs == nil {
+		return false
+	}
+	// Build a synthetic URL so the exception rule matching works
+	syntheticURL := "https://" + host + "/"
+	return rs.MatchesException(syntheticURL, MatchContext{})
+}
+
+// IsElementHideExcepted returns true if this RuleSet contains an element
+// hiding exception (#@#) for the given CSS selector on the given domain.
+// Used to let user #@# exceptions suppress baseline ## rules.
+// Safe to call on a nil receiver (returns false).
+func (rs *RuleSet) IsElementHideExcepted(selector, domain string) bool {
+	if rs == nil || rs.elemHideIdx == nil {
+		return false
+	}
+	return rs.elemHideIdx.isExcepted(selector, strings.ToLower(domain))
+}
+
 // extractHostFromURL pulls the hostname from a URL string.
 func extractHostFromURL(url string) string {
 	schemeEnd := strings.Index(url, "://")

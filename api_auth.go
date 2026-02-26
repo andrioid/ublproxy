@@ -161,9 +161,12 @@ func (a *apiHandler) handleRegisterFinish(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Associate session with client IP for script injection
+	// Associate session with client IP for script injection and per-user rules
 	if a.sessions != nil {
-		a.sessions.Set(clientIPFromRequest(r), sess.Token)
+		a.sessions.Set(clientIPFromRequest(r), sessionEntry{
+			Token:        sess.Token,
+			CredentialID: credID,
+		})
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"token": sess.Token})
@@ -291,9 +294,12 @@ func (a *apiHandler) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Associate session with client IP for script injection
+	// Associate session with client IP for script injection and per-user rules
 	if a.sessions != nil {
-		a.sessions.Set(clientIPFromRequest(r), sess.Token)
+		a.sessions.Set(clientIPFromRequest(r), sessionEntry{
+			Token:        sess.Token,
+			CredentialID: req.CredentialID,
+		})
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"token": sess.Token})

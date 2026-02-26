@@ -50,6 +50,29 @@ func (s *Store) ListSubscriptions(credentialID string) ([]Subscription, error) {
 	return scanSubscriptions(rows)
 }
 
+// ListEnabledSubscriptionURLs returns all enabled subscription URLs for a
+// single credential. Used when building a per-user RuleSet.
+func (s *Store) ListEnabledSubscriptionURLs(credentialID string) ([]string, error) {
+	rows, err := s.db.Query(
+		"SELECT url FROM blocklist_subscriptions WHERE credential_id = ? AND enabled = 1",
+		credentialID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list enabled subscription urls: %w", err)
+	}
+	defer rows.Close()
+
+	var urls []string
+	for rows.Next() {
+		var url string
+		if err := rows.Scan(&url); err != nil {
+			return nil, fmt.Errorf("scan url: %w", err)
+		}
+		urls = append(urls, url)
+	}
+	return urls, rows.Err()
+}
+
 // ListAllEnabledSubscriptionURLs returns all unique enabled subscription URLs
 // across all users. Used when rebuilding the in-memory RuleSet.
 func (s *Store) ListAllEnabledSubscriptionURLs() ([]string, error) {

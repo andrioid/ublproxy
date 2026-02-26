@@ -34,8 +34,8 @@ var hopByHopHeaders = []string{
 
 func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := matchContextFromRequest(r)
-	rules := p.getRules()
-	if rules != nil && rules.ShouldBlockRequest(r.URL.String(), ctx) {
+	clientIP := clientIPFromRequest(r)
+	if p.shouldBlock(clientIP, r.URL.String(), ctx) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

@@ -19,14 +19,14 @@ func (p *proxyHandler) bootstrapScriptTag(clientIP, host string) string {
 		return ""
 	}
 
-	token := p.sessions.Get(clientIP)
-	if token == "" {
+	entry := p.sessions.Get(clientIP)
+	if entry == nil {
 		return ""
 	}
 
 	script := bootstrapJS
 	script = strings.ReplaceAll(script, "__UBLPROXY_PORTAL__", p.portalOrigin)
-	script = strings.ReplaceAll(script, "__UBLPROXY_TOKEN__", token)
+	script = strings.ReplaceAll(script, "__UBLPROXY_TOKEN__", entry.Token)
 	script = strings.ReplaceAll(script, "__UBLPROXY_HOST__", host)
 
 	return "<script>" + script + "</script>"

@@ -90,7 +90,7 @@ func (a *apiHandler) handleCreateSubscription(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	a.triggerReload()
+	a.triggerReload(sess.CredentialID)
 	writeJSON(w, http.StatusCreated, toSubscriptionResponse(*sub))
 }
 
@@ -106,7 +106,7 @@ func (a *apiHandler) handleDeleteSubscription(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	a.triggerReload()
+	a.triggerReload(sess.CredentialID)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -137,7 +137,7 @@ func (a *apiHandler) handlePatchSubscription(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	a.triggerReload()
+	a.triggerReload(sess.CredentialID)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -148,7 +148,7 @@ func (a *apiHandler) handleRefreshSubscriptions(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	a.triggerReload()
+	a.triggerReload(sess.CredentialID)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
