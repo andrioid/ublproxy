@@ -216,6 +216,180 @@ func BenchmarkMatchNoMatch(b *testing.B) {
 	}
 }
 
+func TestResourceTypeOption(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+		url     string
+		resType blocklist.ResourceType
+		want    bool
+	}{
+		// $script only blocks script requests
+		{
+			name:    "script rule matches script request",
+			pattern: "/ads/*.js$script",
+			url:     "http://example.com/ads/tracker.js",
+			resType: blocklist.ResourceScript,
+			want:    true,
+		},
+		{
+			name:    "script rule does not match image request",
+			pattern: "/ads/*.js$script",
+			url:     "http://example.com/ads/tracker.js",
+			resType: blocklist.ResourceImage,
+			want:    false,
+		},
+		{
+			name:    "script rule matches unknown type (backward compat)",
+			pattern: "/ads/*.js$script",
+			url:     "http://example.com/ads/tracker.js",
+			resType: 0,
+			want:    true,
+		},
+
+		// $image only blocks image requests
+		{
+			name:    "image rule matches image request",
+			pattern: "/ads/banner$image",
+			url:     "http://example.com/ads/banner.png",
+			resType: blocklist.ResourceImage,
+			want:    true,
+		},
+		{
+			name:    "image rule does not match script request",
+			pattern: "/ads/banner$image",
+			url:     "http://example.com/ads/banner.png",
+			resType: blocklist.ResourceScript,
+			want:    false,
+		},
+
+		// $stylesheet blocks CSS requests
+		{
+			name:    "stylesheet rule matches stylesheet request",
+			pattern: "/ads/style$stylesheet",
+			url:     "http://example.com/ads/style.css",
+			resType: blocklist.ResourceStylesheet,
+			want:    true,
+		},
+
+		// Multiple types: $script,stylesheet
+		{
+			name:    "multi-type rule matches script",
+			pattern: "/ads/*$script,stylesheet",
+			url:     "http://example.com/ads/file.js",
+			resType: blocklist.ResourceScript,
+			want:    true,
+		},
+		{
+			name:    "multi-type rule matches stylesheet",
+			pattern: "/ads/*$script,stylesheet",
+			url:     "http://example.com/ads/file.css",
+			resType: blocklist.ResourceStylesheet,
+			want:    true,
+		},
+		{
+			name:    "multi-type rule does not match image",
+			pattern: "/ads/*$script,stylesheet",
+			url:     "http://example.com/ads/file.png",
+			resType: blocklist.ResourceImage,
+			want:    false,
+		},
+
+		// Negated types: $~script means "everything except scripts"
+		{
+			name:    "negated script does not match script request",
+			pattern: "/ads/*$~script",
+			url:     "http://example.com/ads/file.js",
+			resType: blocklist.ResourceScript,
+			want:    false,
+		},
+		{
+			name:    "negated script matches image request",
+			pattern: "/ads/*$~script",
+			url:     "http://example.com/ads/file.png",
+			resType: blocklist.ResourceImage,
+			want:    true,
+		},
+
+		// $subdocument for iframe blocking
+		{
+			name:    "subdocument rule matches iframe",
+			pattern: "||adserver.com^$subdocument",
+			url:     "http://adserver.com/widget",
+			resType: blocklist.ResourceSubdocument,
+			want:    true,
+		},
+		{
+			name:    "subdocument rule does not match document",
+			pattern: "||adserver.com^$subdocument",
+			url:     "http://adserver.com/widget",
+			resType: blocklist.ResourceDocument,
+			want:    false,
+		},
+
+		// $xmlhttprequest
+		{
+			name:    "xhr rule matches xhr request",
+			pattern: "/api/track$xmlhttprequest",
+			url:     "http://example.com/api/track",
+			resType: blocklist.ResourceXMLHTTPRequest,
+			want:    true,
+		},
+
+		// $popup is parsed but never matches network requests
+		{
+			name:    "popup rule does not match document request",
+			pattern: "||popup.example.com^$popup",
+			url:     "http://popup.example.com/page",
+			resType: blocklist.ResourceDocument,
+			want:    false,
+		},
+		{
+			name:    "popup rule matches unknown type (backward compat)",
+			pattern: "||popup.example.com^$popup",
+			url:     "http://popup.example.com/page",
+			resType: 0,
+			want:    true,
+		},
+
+		// Combined with other options: $script,third-party
+		{
+			name:    "script+third-party matches cross-origin script",
+			pattern: "/ads/*$script,third-party",
+			url:     "http://adserver.net/ads/tracker.js",
+			resType: blocklist.ResourceScript,
+			want:    true,
+		},
+
+		// $document for page-level blocking
+		{
+			name:    "document rule matches document request",
+			pattern: "||malware.com^$document",
+			url:     "http://malware.com/page",
+			resType: blocklist.ResourceDocument,
+			want:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rule, err := blocklist.Compile(tt.pattern)
+			if err != nil {
+				t.Fatalf("Compile(%q): %v", tt.pattern, err)
+			}
+			ctx := blocklist.MatchContext{
+				PageDomain:   "other.com",
+				ResourceType: tt.resType,
+			}
+			got := rule.MatchWithContext(tt.url, ctx)
+			if got != tt.want {
+				t.Errorf("Compile(%q).MatchWithContext(%q, type=%d) = %v, want %v",
+					tt.pattern, tt.url, tt.resType, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestOptionsStrippedFromPattern(t *testing.T) {
 	// The $options suffix should not be part of the URL pattern
 	rule, _ := blocklist.Compile("/ads/banner.gif$match-case")

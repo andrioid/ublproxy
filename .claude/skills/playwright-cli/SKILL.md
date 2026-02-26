@@ -9,18 +9,108 @@ allowed-tools: Bash(playwright-cli:*)
 ## Quick start
 
 ```bash
-# open new browser
-playwright-cli open
-# navigate to a page
-playwright-cli goto https://playwright.dev
-# interact with the page using refs from the snapshot
-playwright-cli click e15
-playwright-cli type "page.click"
-playwright-cli press Enter
-# take a screenshot (rarely used, as snapshot is more common)
-playwright-cli screenshot
-# close the browser
-playwright-cli close
+# Open a browser through the proxy (proxy must be running)
+mise run browser -- https://example.is
+
+# Open a browser without the proxy (for comparison)
+mise run browser-no-proxy -- https://example.is
+
+# Interact with the proxy session
+playwright-cli -s=proxy snapshot
+playwright-cli -s=proxy screenshot --filename=tmp/with-proxy.png
+
+# Interact with the no-proxy session
+playwright-cli -s=no-proxy snapshot
+playwright-cli -s=no-proxy screenshot --filename=tmp/without-proxy.png
+```
+
+## Proxy testing workflow
+
+### Prerequisites
+
+The proxy must be running with a blocklist:
+
+```bash
+mise run dev -- --blocklist examples/is.rules
+```
+
+### 1. Open browser sessions
+
+```bash
+# Through the proxy (uses playwright-cli-proxy.json config for proxy + ignoreHTTPSErrors)
+mise run browser -- https://example.is
+
+# Without the proxy (for comparison)
+mise run browser-no-proxy -- https://example.is
+```
+
+### 2. Find rules for the target domain
+
+```bash
+# Element hiding rules (##)
+grep "example.is##" examples/is.rules
+
+# URL blocking rules (||)
+grep "||.*example" examples/is.rules
+
+# Global element hiding rules
+grep "^##" examples/is.rules
+```
+
+### 3. Verify element replacement
+
+Matched elements are replaced with `<!-- ublproxy: replaced .selector -->` comments in the DOM:
+
+```bash
+playwright-cli -s=proxy eval "() => {
+  const html = document.documentElement.innerHTML;
+  const matches = html.match(/<!-- ublproxy: replaced [^>]+ -->/g);
+  return { found: (matches || []).length, replacements: matches || [] };
+}"
+```
+
+### 4. Verify CSS fallback injection
+
+Complex selectors fall back to CSS `display: none` injection. Check for injected `<style>` tags:
+
+```bash
+playwright-cli -s=proxy eval "() => {
+  const injected = [...document.querySelectorAll('style')].filter(s =>
+    s.textContent.includes('display: none !important')
+  );
+  return {
+    found: injected.length > 0,
+    css: injected.map(s => s.textContent).join('')
+  };
+}"
+```
+
+### 5. Verify request blocking
+
+Check network log for failed requests to blocked domains:
+
+```bash
+playwright-cli -s=proxy network
+```
+
+Requests to blocked domains should appear as failed. Compare with the no-proxy session:
+
+```bash
+playwright-cli -s=no-proxy network
+```
+
+### 6. Take comparison screenshots
+
+```bash
+playwright-cli -s=proxy screenshot --filename=tmp/with-proxy.png
+playwright-cli -s=no-proxy screenshot --filename=tmp/without-proxy.png
+```
+
+### 7. Cleanup
+
+```bash
+playwright-cli -s=proxy close
+playwright-cli -s=no-proxy close
 ```
 
 ## Commands
@@ -28,29 +118,19 @@ playwright-cli close
 ### Core
 
 ```bash
-playwright-cli open
-# open and navigate right away
-playwright-cli open https://example.com/
-playwright-cli goto https://playwright.dev
-playwright-cli type "search query"
-playwright-cli click e3
-playwright-cli dblclick e7
-playwright-cli fill e5 "user@example.com"
-playwright-cli drag e2 e8
-playwright-cli hover e4
-playwright-cli select e9 "option-value"
-playwright-cli upload ./document.pdf
-playwright-cli check e12
-playwright-cli uncheck e12
-playwright-cli snapshot
-playwright-cli snapshot --filename=after-click.yaml
-playwright-cli eval "document.title"
-playwright-cli eval "el => el.textContent" e5
-playwright-cli dialog-accept
-playwright-cli dialog-accept "confirmation text"
-playwright-cli dialog-dismiss
-playwright-cli resize 1920 1080
-playwright-cli close
+playwright-cli open [url]               # open browser, optionally navigate
+playwright-cli goto <url>               # navigate to a url
+playwright-cli close                    # close the browser
+playwright-cli type <text>              # type text into editable element
+playwright-cli click <ref>              # click an element
+playwright-cli fill <ref> <text>        # fill text into editable element
+playwright-cli hover <ref>              # hover over element
+playwright-cli select <ref> <val>       # select dropdown option
+playwright-cli check <ref>              # check a checkbox
+playwright-cli uncheck <ref>            # uncheck a checkbox
+playwright-cli snapshot                 # capture page snapshot (element refs)
+playwright-cli eval <func> [ref]        # evaluate javascript
+playwright-cli resize <w> <h>           # resize browser window
 ```
 
 ### Navigation
@@ -61,218 +141,90 @@ playwright-cli go-forward
 playwright-cli reload
 ```
 
-### Keyboard
+### Keyboard and mouse
 
 ```bash
-playwright-cli press Enter
-playwright-cli press ArrowDown
-playwright-cli keydown Shift
-playwright-cli keyup Shift
-```
-
-### Mouse
-
-```bash
-playwright-cli mousemove 150 300
-playwright-cli mousedown
-playwright-cli mousedown right
-playwright-cli mouseup
-playwright-cli mouseup right
-playwright-cli mousewheel 0 100
+playwright-cli press <key>              # press a key (Enter, ArrowDown, etc.)
+playwright-cli keydown <key>
+playwright-cli keyup <key>
+playwright-cli mousemove <x> <y>
+playwright-cli mousedown [button]
+playwright-cli mouseup [button]
+playwright-cli mousewheel <dx> <dy>
 ```
 
 ### Save as
 
 ```bash
-playwright-cli screenshot
-playwright-cli screenshot e5
-playwright-cli screenshot --filename=page.png
-playwright-cli pdf --filename=page.pdf
+playwright-cli screenshot               # screenshot of current page
+playwright-cli screenshot <ref>         # screenshot of element
+playwright-cli screenshot --filename=f  # save to specific file
+playwright-cli pdf --filename=page.pdf  # save page as pdf
 ```
 
 ### Tabs
 
 ```bash
 playwright-cli tab-list
-playwright-cli tab-new
-playwright-cli tab-new https://example.com/page
-playwright-cli tab-close
-playwright-cli tab-close 2
-playwright-cli tab-select 0
-```
-
-### Storage
-
-```bash
-playwright-cli state-save
-playwright-cli state-save auth.json
-playwright-cli state-load auth.json
-
-# Cookies
-playwright-cli cookie-list
-playwright-cli cookie-list --domain=example.com
-playwright-cli cookie-get session_id
-playwright-cli cookie-set session_id abc123
-playwright-cli cookie-set session_id abc123 --domain=example.com --httpOnly --secure
-playwright-cli cookie-delete session_id
-playwright-cli cookie-clear
-
-# LocalStorage
-playwright-cli localstorage-list
-playwright-cli localstorage-get theme
-playwright-cli localstorage-set theme dark
-playwright-cli localstorage-delete theme
-playwright-cli localstorage-clear
-
-# SessionStorage
-playwright-cli sessionstorage-list
-playwright-cli sessionstorage-get step
-playwright-cli sessionstorage-set step 3
-playwright-cli sessionstorage-delete step
-playwright-cli sessionstorage-clear
+playwright-cli tab-new [url]
+playwright-cli tab-close [index]
+playwright-cli tab-select <index>
 ```
 
 ### Network
 
 ```bash
-playwright-cli route "**/*.jpg" --status=404
-playwright-cli route "https://api.example.com/**" --body='{"mock": true}'
-playwright-cli route-list
-playwright-cli unroute "**/*.jpg"
-playwright-cli unroute
+playwright-cli route <pattern>          # mock network requests
+playwright-cli route-list               # list active routes
+playwright-cli unroute [pattern]        # remove routes
+playwright-cli network                  # list all network requests
 ```
 
 ### DevTools
 
 ```bash
-playwright-cli console
-playwright-cli console warning
-playwright-cli network
-playwright-cli run-code "async page => await page.context().grantPermissions(['geolocation'])"
-playwright-cli tracing-start
-playwright-cli tracing-stop
-playwright-cli video-start
-playwright-cli video-stop video.webm
+playwright-cli console [min-level]      # list console messages
+playwright-cli run-code <code>          # run playwright code snippet
+playwright-cli tracing-start            # start trace recording
+playwright-cli tracing-stop             # stop trace recording
 ```
 
-## Open parameters
+### Sessions
+
 ```bash
-# Use specific browser when creating session
-playwright-cli open --browser=chrome
-playwright-cli open --browser=firefox
-playwright-cli open --browser=webkit
-playwright-cli open --browser=msedge
-# Connect to browser via extension
-playwright-cli open --extension
+playwright-cli -s=name <cmd>            # run command in named session
+playwright-cli list                     # list all sessions
+playwright-cli close-all                # close all browsers
+playwright-cli kill-all                 # forcefully kill all browsers
+```
 
-# Use persistent profile (by default profile is in-memory)
-playwright-cli open --persistent
-# Use persistent profile with custom directory
-playwright-cli open --profile=/path/to/profile
+### Open parameters
 
-# Start with config file
-playwright-cli open --config=my-config.json
-
-# Close the browser
-playwright-cli close
-# Delete user data for the default session
-playwright-cli delete-data
+```bash
+playwright-cli open --browser=chrome    # use specific browser
+playwright-cli open --config=file.json  # use config file
+playwright-cli open --persistent        # persist browser profile to disk
+playwright-cli open --profile=<path>    # custom profile directory
 ```
 
 ## Snapshots
 
-After each command, playwright-cli provides a snapshot of the current browser state.
+After each command, playwright-cli provides a snapshot of the current browser state with element refs (e.g. `e3`, `e15`) that can be used with `click`, `fill`, and other commands.
 
 ```bash
-> playwright-cli goto https://example.com
+> playwright-cli -s=proxy goto https://example.is
 ### Page
-- Page URL: https://example.com/
-- Page Title: Example Domain
+- Page URL: https://example.is/
+- Page Title: Example
 ### Snapshot
-[Snapshot](.playwright-cli/page-2026-02-14T19-22-42-679Z.yml)
+[Snapshot](.playwright-cli/page-2026-02-26T10-00-00-000Z.yml)
 ```
 
-You can also take a snapshot on demand using `playwright-cli snapshot` command.
+## Troubleshooting
 
-If `--filename` is not provided, a new snapshot file is created with a timestamp. Default to automatic file naming, use `--filename=` when artifact is a part of the workflow result.
-
-## Browser Sessions
-
-```bash
-# create new browser session named "mysession" with persistent profile
-playwright-cli -s=mysession open example.com --persistent
-# same with manually specified profile directory (use when requested explicitly)
-playwright-cli -s=mysession open example.com --profile=/path/to/profile
-playwright-cli -s=mysession click e6
-playwright-cli -s=mysession close  # stop a named browser
-playwright-cli -s=mysession delete-data  # delete user data for persistent session
-
-playwright-cli list
-# Close all browsers
-playwright-cli close-all
-# Forcefully kill all browser processes
-playwright-cli kill-all
-```
-
-## Local installation
-
-In some cases user might want to install playwright-cli locally. If running globally available `playwright-cli` binary fails, use `npx playwright-cli` to run the commands. For example:
-
-```bash
-npx playwright-cli open https://example.com
-npx playwright-cli click e1
-```
-
-## Example: Form submission
-
-```bash
-playwright-cli open https://example.com/form
-playwright-cli snapshot
-
-playwright-cli fill e1 "user@example.com"
-playwright-cli fill e2 "password123"
-playwright-cli click e3
-playwright-cli snapshot
-playwright-cli close
-```
-
-## Example: Multi-tab workflow
-
-```bash
-playwright-cli open https://example.com
-playwright-cli tab-new https://example.com/other
-playwright-cli tab-list
-playwright-cli tab-select 0
-playwright-cli snapshot
-playwright-cli close
-```
-
-## Example: Debugging with DevTools
-
-```bash
-playwright-cli open https://example.com
-playwright-cli click e4
-playwright-cli fill e7 "test"
-playwright-cli console
-playwright-cli network
-playwright-cli close
-```
-
-```bash
-playwright-cli open https://example.com
-playwright-cli tracing-start
-playwright-cli click e4
-playwright-cli fill e7 "test"
-playwright-cli tracing-stop
-playwright-cli close
-```
-
-## Specific tasks
-
-* **Request mocking** [references/request-mocking.md](references/request-mocking.md)
-* **Running Playwright code** [references/running-code.md](references/running-code.md)
-* **Browser session management** [references/session-management.md](references/session-management.md)
-* **Storage state (cookies, localStorage)** [references/storage-state.md](references/storage-state.md)
-* **Test generation** [references/test-generation.md](references/test-generation.md)
-* **Tracing** [references/tracing.md](references/tracing.md)
-* **Video recording** [references/video-recording.md](references/video-recording.md)
+- **"proxy is not running"** -- start the proxy first with `mise run dev -- --blocklist examples/is.rules`
+- **HTTPS timeouts** -- the proxy config (`playwright-cli-proxy.json`) sets `ignoreHTTPSErrors: true`. Verify the config file exists and is passed via `--config`.
+- **Navigation timeout** -- the target site may be down. Try `curl --max-time 5 https://example.is` to verify.
+- **Cloudflare challenge** -- some sites block headless browsers. The page title will be "Just a moment...". Try a different site.
+- **No element replacements** -- the page may use zstd compression (not yet supported) or the selectors may no longer match the current site markup.
+- **Stale sessions** -- if browsers become unresponsive, run `playwright-cli kill-all`.

@@ -1,0 +1,11 @@
+{
+  "browser": {
+    "contextOptions": {
+      "ignoreHTTPSErrors": true,
+      "proxy": {
+        "server": "https://localhost:8443",
+        "bypass": "localhost,127.0.0.1,<-loopback>"
+      }
+    }
+  }
+}

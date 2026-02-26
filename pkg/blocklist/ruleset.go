@@ -3,8 +3,11 @@ package blocklist
 import (
 	"bufio"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 // RuleSet holds blocking rules for URL filtering. It combines a hostname map
@@ -71,6 +74,15 @@ func (rs *RuleSet) AddRule(pattern string) error {
 	return nil
 }
 
+// LoadReader reads rules line-by-line from any io.Reader.
+func (rs *RuleSet) LoadReader(r io.Reader) error {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		rs.AddLine(scanner.Text())
+	}
+	return scanner.Err()
+}
+
 // LoadFile reads a blocklist file and adds all parsed rules.
 // Hostname-only rules go to the fast path; URL patterns become compiled rules.
 func (rs *RuleSet) LoadFile(path string) error {
@@ -79,12 +91,22 @@ func (rs *RuleSet) LoadFile(path string) error {
 		return fmt.Errorf("open blocklist %s: %w", path, err)
 	}
 	defer f.Close()
+	return rs.LoadReader(f)
+}
 
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		rs.AddLine(scanner.Text())
+// LoadURL fetches a blocklist from an HTTP(S) URL and adds all parsed rules.
+// Uses a 30-second timeout to avoid blocking startup on unresponsive servers.
+func (rs *RuleSet) LoadURL(url string) error {
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("fetch blocklist %s: %w", url, err)
 	}
-	return scanner.Err()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("fetch blocklist %s: HTTP %d", url, resp.StatusCode)
+	}
+	return rs.LoadReader(resp.Body)
 }
 
 // AddLine parses a single line from a blocklist file and adds it to the
@@ -199,7 +221,10 @@ func (rs *RuleSet) ShouldBlockRequest(rawURL string, ctx MatchContext) bool {
 
 	// Pre-lowercase once to avoid redundant ToLower in each rule match
 	lowerURL := strings.ToLower(rawURL)
-	lowerCtx := MatchContext{PageDomain: strings.ToLower(ctx.PageDomain)}
+	lowerCtx := MatchContext{
+		PageDomain:   strings.ToLower(ctx.PageDomain),
+		ResourceType: ctx.ResourceType,
+	}
 	host := extractHostFromURL(lowerURL)
 
 	blocked := false
@@ -282,6 +307,56 @@ func (rs *RuleSet) isHostBlocked(host string) bool {
 		}
 		host = host[dot+1:]
 	}
+}
+
+// MatchesException returns true if the URL matches any exception rule (@@)
+// in this RuleSet. This is used for per-user exception checking where user
+// exceptions need to override baseline blocking rules.
+// Safe to call on a nil receiver (returns false).
+func (rs *RuleSet) MatchesException(rawURL string, ctx MatchContext) bool {
+	if rs == nil {
+		return false
+	}
+
+	lowerURL := strings.ToLower(rawURL)
+	lowerCtx := MatchContext{
+		PageDomain:   strings.ToLower(ctx.PageDomain),
+		ResourceType: ctx.ResourceType,
+	}
+	host := extractHostFromURL(lowerURL)
+
+	if rs.matchDomainIndexed(rs.domainExc, host, rawURL, lowerURL, lowerCtx) {
+		return true
+	}
+	for _, exc := range rs.exceptions {
+		if exc.matchWithContextLower(rawURL, lowerURL, lowerCtx) {
+			return true
+		}
+	}
+	return false
+}
+
+// MatchesExceptionHost returns true if the hostname matches any hostname-level
+// exception rule (@@||hostname^). Used at CONNECT time where only the host is
+// known. Safe to call on a nil receiver (returns false).
+func (rs *RuleSet) MatchesExceptionHost(host string) bool {
+	if rs == nil {
+		return false
+	}
+	// Build a synthetic URL so the exception rule matching works
+	syntheticURL := "https://" + host + "/"
+	return rs.MatchesException(syntheticURL, MatchContext{})
+}
+
+// IsElementHideExcepted returns true if this RuleSet contains an element
+// hiding exception (#@#) for the given CSS selector on the given domain.
+// Used to let user #@# exceptions suppress baseline ## rules.
+// Safe to call on a nil receiver (returns false).
+func (rs *RuleSet) IsElementHideExcepted(selector, domain string) bool {
+	if rs == nil || rs.elemHideIdx == nil {
+		return false
+	}
+	return rs.elemHideIdx.isExcepted(selector, strings.ToLower(domain))
 }
 
 // extractHostFromURL pulls the hostname from a URL string.

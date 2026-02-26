@@ -17,8 +17,9 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 		host = r.Host
 		port = "443"
 	}
-	if p.rules.IsHostBlocked(host) {
-		w.WriteHeader(http.StatusNoContent)
+	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if p.shouldBlockHost(clientIP, host) {
+		http.Error(w, "blocked", http.StatusForbidden)
 		return
 	}
 
@@ -44,7 +45,9 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TLS handshake with the client, presenting our dynamic cert
+	// TLS handshake with the client, presenting our dynamic cert.
+	// Set a deadline to prevent slow/malicious clients from tying up goroutines.
+	clientConn.SetDeadline(time.Now().Add(10 * time.Second))
 	tlsClientConn := tls.Server(clientConn, &tls.Config{
 		Certificates: []tls.Certificate{*tlsCert},
 	})
@@ -54,13 +57,18 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tlsClientConn.Close()
 
-	p.proxyTLSRequests(tlsClientConn, host, port)
+	// Clear the deadline after successful handshake
+	clientConn.SetDeadline(time.Time{})
+
+	// Extract client IP for script injection (from the original CONNECT request)
+	cIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	p.proxyTLSRequests(tlsClientConn, host, port, cIP)
 }
 
 // proxyTLSRequests reads HTTP requests from the intercepted client TLS
 // connection and forwards them to the upstream server. Supports keep-alive
 // by looping until the client closes the connection or an error occurs.
-func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port string) {
+func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port, clientIP string) {
 	clientReader := bufio.NewReader(clientTLS)
 
 	for {
@@ -76,8 +84,8 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port string) 
 
 		// URL-level blocking for pattern rules (hostname was already
 		// checked at CONNECT time; this catches path-specific rules)
-		ctx := matchContextFromReferer(req.Header.Get("Referer"))
-		if p.rules.ShouldBlockRequest(targetURL, ctx) {
+		ctx := matchContextFromRequest(req)
+		if p.shouldBlock(clientIP, targetURL, ctx) {
 			req.Body.Close()
 			blocked := &http.Response{
 				StatusCode: http.StatusNoContent,
@@ -131,9 +139,9 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port string) 
 			return
 		}
 
-		// Inject element hiding CSS into HTML responses (skip HEAD — no body to modify)
+		// Replace ad elements in HTML responses (skip HEAD — no body to modify)
 		if req.Method != http.MethodHead {
-			if modified, ok := p.injectElementHidingCSS(resp, host); ok {
+			if modified, ok := p.applyElementHiding(resp, host, clientIP); ok {
 				resp.Body.Close()
 				resp.Body = io.NopCloser(bytes.NewReader(modified))
 				resp.ContentLength = int64(len(modified))

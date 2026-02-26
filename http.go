@@ -2,12 +2,22 @@ package main
 
 import (
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
 
 	"ublproxy/pkg/blocklist"
 )
+
+// clientIPFromRequest extracts the IP address from the request's RemoteAddr.
+func clientIPFromRequest(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
 
 // Headers that must not be forwarded between hops.
 // https://www.rfc-editor.org/rfc/rfc2616#section-13.5.1
@@ -23,8 +33,9 @@ var hopByHopHeaders = []string{
 }
 
 func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx := matchContextFromReferer(r.Header.Get("Referer"))
-	if p.rules.ShouldBlockRequest(r.URL.String(), ctx) {
+	ctx := matchContextFromRequest(r)
+	clientIP := clientIPFromRequest(r)
+	if p.shouldBlock(clientIP, r.URL.String(), ctx) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -55,9 +66,9 @@ func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// Inject element hiding CSS into HTML responses (skip HEAD — no body to modify)
+	// Replace ad elements in HTML responses (skip HEAD — no body to modify)
 	if r.Method != http.MethodHead {
-		if modified, ok := p.injectElementHidingCSS(resp, r.URL.Hostname()); ok {
+		if modified, ok := p.applyElementHiding(resp, r.URL.Hostname(), clientIPFromRequest(r)); ok {
 			copyHeaders(w.Header(), resp.Header)
 			removeHopByHopHeaders(w.Header())
 			w.Header().Del("Content-Length")
@@ -144,17 +155,23 @@ func (p *proxyHandler) handleHTTPUpgrade(w http.ResponseWriter, r *http.Request)
 	bidirectionalCopy(clientConn, upstreamConn)
 }
 
-// matchContextFromReferer extracts the page domain from the Referer header
-// for evaluating context-dependent filter options ($third-party, $domain).
-func matchContextFromReferer(referer string) blocklist.MatchContext {
+// matchContextFromRequest builds a MatchContext from the HTTP request,
+// extracting the page domain (from Referer) and resource type (from
+// Sec-Fetch-Dest, Accept header, or URL extension).
+func matchContextFromRequest(req *http.Request) blocklist.MatchContext {
+	ctx := blocklist.MatchContext{
+		ResourceType: blocklist.InferResourceType(req),
+	}
+	referer := req.Header.Get("Referer")
 	if referer == "" {
-		return blocklist.MatchContext{}
+		return ctx
 	}
 	parsed, err := url.Parse(referer)
 	if err != nil {
-		return blocklist.MatchContext{}
+		return ctx
 	}
-	return blocklist.MatchContext{PageDomain: parsed.Hostname()}
+	ctx.PageDomain = parsed.Hostname()
+	return ctx
 }
 
 func copyHeaders(dst, src http.Header) {

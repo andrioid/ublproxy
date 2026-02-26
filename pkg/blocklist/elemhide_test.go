@@ -7,7 +7,15 @@ import (
 	"ublproxy/pkg/blocklist"
 )
 
-func TestCSSForDomain(t *testing.T) {
+// selectorPresent returns true if the selector appears in the CSS.
+func selectorPresent(eh *blocklist.ElementHiding, sel string) bool {
+	if eh == nil {
+		return false
+	}
+	return strings.Contains(eh.CSS, sel)
+}
+
+func TestElementHidingForDomain(t *testing.T) {
 	rs := blocklist.NewRuleSet()
 	rs.AddLine("##.ad-banner")
 	rs.AddLine("##.tracking-pixel")
@@ -44,48 +52,70 @@ func TestCSSForDomain(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.domain, func(t *testing.T) {
-			css := rs.CSSForDomain(tt.domain)
+			eh := rs.ElementHidingForDomain(tt.domain)
 			for _, sel := range tt.contains {
-				if !strings.Contains(css, sel) {
-					t.Errorf("CSS for %q should contain %q, got:\n%s", tt.domain, sel, css)
+				if !selectorPresent(eh, sel) {
+					t.Errorf("ElementHiding for %q should contain %q", tt.domain, sel)
 				}
 			}
 			for _, sel := range tt.excludes {
-				if strings.Contains(css, sel) {
-					t.Errorf("CSS for %q should NOT contain %q, got:\n%s", tt.domain, sel, css)
+				if selectorPresent(eh, sel) {
+					t.Errorf("ElementHiding for %q should NOT contain %q", tt.domain, sel)
 				}
 			}
 		})
 	}
 }
 
-func TestCSSForDomainFormat(t *testing.T) {
+func TestElementHidingCSS(t *testing.T) {
 	rs := blocklist.NewRuleSet()
 	rs.AddLine("##.ad-banner")
 
-	css := rs.CSSForDomain("example.com")
+	eh := rs.ElementHidingForDomain("example.com")
+	if eh == nil {
+		t.Fatal("expected non-nil ElementHiding")
+	}
 
-	if !strings.Contains(css, "display: none !important") {
-		t.Errorf("CSS should use 'display: none !important', got:\n%s", css)
+	if !strings.Contains(eh.CSS, ".ad-banner") {
+		t.Errorf("selector should appear in CSS, got:\n%s", eh.CSS)
+	}
+	if !strings.Contains(eh.CSS, "display: none !important") {
+		t.Errorf("CSS should use 'display: none !important', got:\n%s", eh.CSS)
 	}
 }
 
-func TestCSSForDomainEmpty(t *testing.T) {
+func TestElementHidingComplexSelector(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("example.com##div .ad-child")
+
+	eh := rs.ElementHidingForDomain("example.com")
+	if eh == nil {
+		t.Fatal("expected non-nil ElementHiding")
+	}
+
+	if !strings.Contains(eh.CSS, "div .ad-child") {
+		t.Errorf("complex selector should be in CSS, got:\n%s", eh.CSS)
+	}
+	if !strings.Contains(eh.CSS, "display: none !important") {
+		t.Errorf("CSS should use 'display: none !important', got:\n%s", eh.CSS)
+	}
+}
+
+func TestElementHidingEmpty(t *testing.T) {
 	rs := blocklist.NewRuleSet()
 	rs.AddLine("example.com##.ad")
 
-	// No rules apply to this domain
-	css := rs.CSSForDomain("other.com")
-	if css != "" {
-		t.Errorf("expected empty CSS for non-matching domain, got:\n%s", css)
+	eh := rs.ElementHidingForDomain("other.com")
+	if eh != nil {
+		t.Errorf("expected nil ElementHiding for non-matching domain, got: %+v", eh)
 	}
 }
 
-func TestCSSForDomainNilSafe(t *testing.T) {
+func TestElementHidingNilSafe(t *testing.T) {
 	var rs *blocklist.RuleSet
-	css := rs.CSSForDomain("example.com")
-	if css != "" {
-		t.Errorf("nil RuleSet should return empty CSS, got: %s", css)
+	eh := rs.ElementHidingForDomain("example.com")
+	if eh != nil {
+		t.Errorf("nil RuleSet should return nil, got: %+v", eh)
 	}
 }
 
@@ -94,29 +124,28 @@ func TestElementHideException(t *testing.T) {
 	rs.AddLine("##.ad-banner")
 	rs.AddLine("example.com#@#.ad-banner")
 
-	// On example.com, the exception should prevent .ad-banner from being hidden
-	css := rs.CSSForDomain("example.com")
-	if strings.Contains(css, ".ad-banner") {
-		t.Errorf("exception should prevent .ad-banner on example.com, got:\n%s", css)
+	// On example.com, the exception should prevent .ad-banner from appearing
+	eh := rs.ElementHidingForDomain("example.com")
+	if selectorPresent(eh, ".ad-banner") {
+		t.Error("exception should prevent .ad-banner on example.com")
 	}
 
-	// On other domains, .ad-banner should still be hidden
-	css = rs.CSSForDomain("other.com")
-	if !strings.Contains(css, ".ad-banner") {
-		t.Errorf(".ad-banner should be hidden on other.com, got:\n%s", css)
+	// On other domains, .ad-banner should still be present
+	eh = rs.ElementHidingForDomain("other.com")
+	if !selectorPresent(eh, ".ad-banner") {
+		t.Error(".ad-banner should be present on other.com")
 	}
 }
 
 func TestElementHideFromLoadFile(t *testing.T) {
 	rs := blocklist.NewRuleSet()
-	// addLine is used internally by LoadFile
 	rs.AddLine("##.global-ad")
 	rs.AddLine("||ads.example.com^")
 	rs.AddLine("/tracking.js")
 
 	// Element hiding should work alongside blocking rules
-	css := rs.CSSForDomain("example.com")
-	if !strings.Contains(css, ".global-ad") {
+	eh := rs.ElementHidingForDomain("example.com")
+	if !selectorPresent(eh, ".global-ad") {
 		t.Error("element hiding rules should be parsed alongside blocking rules")
 	}
 

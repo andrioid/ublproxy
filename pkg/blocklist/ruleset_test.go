@@ -1,7 +1,11 @@
 package blocklist_test
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"ublproxy/pkg/blocklist"
@@ -225,6 +229,42 @@ func TestRuleSetExceptionHostname(t *testing.T) {
 	}
 }
 
+func TestMatchesException(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddException("@@||safe.example.com^")
+	rs.AddException("@@/ads/acceptable*")
+
+	// Hostname-level exception
+	if !rs.MatchesException("https://safe.example.com/page", blocklist.MatchContext{}) {
+		t.Error("should match hostname exception")
+	}
+	// Path-level exception
+	if !rs.MatchesException("https://example.com/ads/acceptable-banner.png", blocklist.MatchContext{}) {
+		t.Error("should match path exception")
+	}
+	// No exception for unrelated URL
+	if rs.MatchesException("https://ads.example.com/tracker.js", blocklist.MatchContext{}) {
+		t.Error("should not match unrelated URL")
+	}
+	// Nil receiver
+	var nilRS *blocklist.RuleSet
+	if nilRS.MatchesException("https://safe.example.com/", blocklist.MatchContext{}) {
+		t.Error("nil receiver should return false")
+	}
+}
+
+func TestMatchesExceptionHost(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddException("@@||safe.example.com^")
+
+	if !rs.MatchesExceptionHost("safe.example.com") {
+		t.Error("should match excepted host")
+	}
+	if rs.MatchesExceptionHost("ads.example.com") {
+		t.Error("should not match non-excepted host")
+	}
+}
+
 func TestRuleSetLoadFileWithExceptions(t *testing.T) {
 	content := `||ads.example.com^
 /tracking.js
@@ -304,6 +344,79 @@ func TestHostnameRuleWithOptionsNotFastPathed(t *testing.T) {
 	}
 }
 
+func TestLoadReader(t *testing.T) {
+	input := strings.NewReader(`! Comment
+||ads.example.com^
+/tracking.js
+@@||ads.example.com/safe^
+`)
+	rs := blocklist.NewRuleSet()
+	if err := rs.LoadReader(input); err != nil {
+		t.Fatalf("LoadReader: %v", err)
+	}
+
+	if !rs.ShouldBlock("http://ads.example.com/banner.gif") {
+		t.Error("hostname rule should block")
+	}
+	if !rs.ShouldBlock("http://other.com/tracking.js") {
+		t.Error("pattern rule should block")
+	}
+	if rs.ShouldBlock("http://ads.example.com/safe") {
+		t.Error("exception should allow /safe")
+	}
+}
+
+func TestLoadURL(t *testing.T) {
+	rules := `||ads.example.com^
+/tracking.js
+`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		io.WriteString(w, rules)
+	}))
+	defer srv.Close()
+
+	rs := blocklist.NewRuleSet()
+	if err := rs.LoadURL(srv.URL); err != nil {
+		t.Fatalf("LoadURL: %v", err)
+	}
+
+	if rs.HostCount() != 1 {
+		t.Errorf("expected 1 hostname, got %d", rs.HostCount())
+	}
+	if !rs.ShouldBlock("http://ads.example.com/banner.gif") {
+		t.Error("hostname rule should block")
+	}
+	if !rs.ShouldBlock("http://other.com/tracking.js") {
+		t.Error("pattern rule should block")
+	}
+}
+
+func TestLoadURLError(t *testing.T) {
+	// 404 response should return an error
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	rs := blocklist.NewRuleSet()
+	err := rs.LoadURL(srv.URL)
+	if err == nil {
+		t.Fatal("expected error for 404 response")
+	}
+	if !strings.Contains(err.Error(), "HTTP 404") {
+		t.Errorf("expected HTTP 404 in error, got: %v", err)
+	}
+}
+
+func TestLoadURLUnreachable(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	err := rs.LoadURL("http://127.0.0.1:0/nonexistent")
+	if err == nil {
+		t.Fatal("expected error for unreachable server")
+	}
+}
+
 func TestHostnameRuleWithDomainOption(t *testing.T) {
 	rs := blocklist.NewRuleSet()
 	rs.AddLine("||tracker.example.com^$domain=news.com")
@@ -319,4 +432,71 @@ func TestHostnameRuleWithDomainOption(t *testing.T) {
 	if rs.ShouldBlockRequest("http://tracker.example.com/pixel.gif", ctx) {
 		t.Error("should not block when page domain doesn't match $domain option")
 	}
+}
+
+// loadEasyList fetches the full EasyList for benchmarking.
+// Skips if the download fails (e.g. no network access in CI).
+func loadEasyList(tb testing.TB) *blocklist.RuleSet {
+	tb.Helper()
+	const url = "https://easylist.to/easylist/easylist.txt"
+	rs := blocklist.NewRuleSet()
+	if err := rs.LoadURL(url); err != nil {
+		tb.Skipf("easylist not available: %v", err)
+	}
+	return rs
+}
+
+func BenchmarkShouldBlockEasyList(b *testing.B) {
+	rs := loadEasyList(b)
+	b.Logf("Loaded %d hostnames, %d URL rules", rs.HostCount(), rs.RuleCount())
+
+	ctx := blocklist.MatchContext{
+		PageDomain:   "example.com",
+		ResourceType: blocklist.ResourceDocument,
+	}
+
+	// Non-blocked URL (worst case): must check all tiers to prove no match
+	b.Run("not-blocked", func(b *testing.B) {
+		url := "https://www.example.com/articles/2024/interesting-article?ref=home"
+		b.ResetTimer()
+		for range b.N {
+			rs.ShouldBlockRequest(url, ctx)
+		}
+	})
+
+	// Blocked by hostname map (best case): fast-path hash lookup
+	b.Run("blocked-hostname", func(b *testing.B) {
+		url := "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"
+		b.ResetTimer()
+		for range b.N {
+			rs.ShouldBlockRequest(url, ctx)
+		}
+	})
+
+	// Blocked by domain-indexed rule (path pattern match)
+	b.Run("blocked-domain-rule", func(b *testing.B) {
+		url := "https://cdn.example.com/ads/banner123.gif"
+		b.ResetTimer()
+		for range b.N {
+			rs.ShouldBlockRequest(url, ctx)
+		}
+	})
+
+	// Blocked by generic rule (substring pattern match)
+	b.Run("blocked-generic-rule", func(b *testing.B) {
+		url := "https://www.example.com/assets/ad-manager/loader.js"
+		b.ResetTimer()
+		for range b.N {
+			rs.ShouldBlockRequest(url, ctx)
+		}
+	})
+
+	// Realistic mix: long URL on a CDN that isn't blocked
+	b.Run("not-blocked-cdn", func(b *testing.B) {
+		url := "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"
+		b.ResetTimer()
+		for range b.N {
+			rs.ShouldBlockRequest(url, ctx)
+		}
+	})
 }

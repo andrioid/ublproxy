@@ -15,14 +15,18 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/andybalholm/brotli"
 
 	"ublproxy/pkg/blocklist"
+	"ublproxy/pkg/store"
 )
 
 // testEnv holds everything needed to run a proxy e2e test.
@@ -31,6 +35,7 @@ type testEnv struct {
 	httpURL  string
 	httpsURL string
 	caPool   *x509.CertPool
+	handler  *proxyHandler
 }
 
 // startTestEnv spins up an upstream HTTP server, an upstream HTTPS server, and
@@ -51,7 +56,10 @@ func startTestEnv(t *testing.T, upstreamHandler http.Handler, rules *blocklist.R
 
 	certs := newCertCache(caCert, caKey)
 	caCertPEM := encodeCertPEM(caCert)
-	handler := newProxyHandler(certs, caCertPEM, rules)
+	handler := newProxyHandler(certs, caCertPEM)
+	if rules != nil {
+		handler.baselineRules.Store(rules)
+	}
 
 	// Trust the test HTTPS server's certificate so the proxy can validate
 	// upstream TLS connections (proxy validates upstream certs in production)
@@ -82,6 +90,7 @@ func startTestEnv(t *testing.T, upstreamHandler http.Handler, rules *blocklist.R
 		httpURL:  httpServer.URL,
 		httpsURL: httpsServer.URL,
 		caPool:   caPool,
+		handler:  handler,
 	}
 }
 
@@ -336,6 +345,40 @@ func TestPortalCACertDownload(t *testing.T) {
 
 	if cert.Subject.CommonName != "ublproxy CA" {
 		t.Errorf("certificate CN = %q, want %q", cert.Subject.CommonName, "ublproxy CA")
+	}
+}
+
+func TestProxyPAC(t *testing.T) {
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), nil)
+
+	// Set portalOrigin so the PAC template can extract host:port
+	env.handler.portalOrigin = "https://myhost:9443"
+
+	resp, err := http.Get(env.proxyURL + "/proxy.pac")
+	if err != nil {
+		t.Fatalf("GET /proxy.pac: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType != "application/x-ns-proxy-autoconfig" {
+		t.Errorf("Content-Type = %q, want %q", contentType, "application/x-ns-proxy-autoconfig")
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "FindProxyForURL") {
+		t.Error("PAC body does not contain FindProxyForURL function")
+	}
+	if !strings.Contains(bodyStr, "HTTPS myhost:9443") {
+		t.Errorf("PAC body does not contain expected proxy directive, got:\n%s", bodyStr)
 	}
 }
 
@@ -616,7 +659,7 @@ func TestThirdPartyOption(t *testing.T) {
 	}
 }
 
-func TestElementHidingInjectsCSS(t *testing.T) {
+func TestElementHidingCSSInjection(t *testing.T) {
 	rs := blocklist.NewRuleSet()
 	rs.AddLine("##.ad-banner")
 	rs.AddLine("##.tracking-pixel")
@@ -624,7 +667,11 @@ func TestElementHidingInjectsCSS(t *testing.T) {
 	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`<html><head><title>Test</title></head><body><div class="ad-banner">Ad</div></body></html>`))
+		w.Write([]byte(`<html><head><title>Test</title></head><body>` +
+			`<div class="ad-banner">Ad content</div>` +
+			`<img class="tracking-pixel" src="pixel.gif">` +
+			`<p>Real content</p>` +
+			`</body></html>`))
 	})
 
 	env := startTestEnv(t, upstream, rs)
@@ -639,23 +686,31 @@ func TestElementHidingInjectsCSS(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	bodyStr := string(body)
 
-	// Should contain injected style tag
+	// CSS should be injected to hide matching elements
 	if !strings.Contains(bodyStr, "<style>") {
-		t.Errorf("response should contain <style> tag, got:\n%s", bodyStr)
+		t.Errorf("should contain injected style tag, got:\n%s", bodyStr)
 	}
 	if !strings.Contains(bodyStr, ".ad-banner") {
-		t.Errorf("response should contain .ad-banner selector, got:\n%s", bodyStr)
+		t.Errorf("CSS should contain .ad-banner selector, got:\n%s", bodyStr)
 	}
 	if !strings.Contains(bodyStr, ".tracking-pixel") {
-		t.Errorf("response should contain .tracking-pixel selector, got:\n%s", bodyStr)
+		t.Errorf("CSS should contain .tracking-pixel selector, got:\n%s", bodyStr)
 	}
 	if !strings.Contains(bodyStr, "display: none !important") {
-		t.Errorf("response should contain 'display: none !important', got:\n%s", bodyStr)
+		t.Errorf("CSS should use display:none, got:\n%s", bodyStr)
 	}
 
-	// Original content should still be present
+	// Content elements should remain in DOM (hidden by CSS, not stripped)
+	if !strings.Contains(bodyStr, "Ad content") {
+		t.Errorf("ad element should remain in DOM (CSS hides it), got:\n%s", bodyStr)
+	}
+
+	// Non-ad content should be preserved
 	if !strings.Contains(bodyStr, "<title>Test</title>") {
-		t.Errorf("original content should be preserved, got:\n%s", bodyStr)
+		t.Errorf("title should be preserved, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Real content") {
+		t.Errorf("real content should be preserved, got:\n%s", bodyStr)
 	}
 }
 
@@ -752,7 +807,7 @@ func TestElementHidingBrotli(t *testing.T) {
 	rs := blocklist.NewRuleSet()
 	rs.AddLine("##.ad-banner")
 
-	htmlBody := `<html><head></head><body>Hello</body></html>`
+	htmlBody := `<html><head></head><body><div class="ad-banner">Ad</div><p>Hello</p></body></html>`
 
 	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var buf bytes.Buffer
@@ -782,7 +837,10 @@ func TestElementHidingBrotli(t *testing.T) {
 		t.Errorf("brotli HTML should have CSS injected, got:\n%s", bodyStr)
 	}
 	if !strings.Contains(bodyStr, ".ad-banner") {
-		t.Errorf("brotli HTML should contain .ad-banner selector, got:\n%s", bodyStr)
+		t.Errorf("CSS should contain .ad-banner selector, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Hello") {
+		t.Errorf("non-ad content should be preserved, got:\n%s", bodyStr)
 	}
 }
 
@@ -793,7 +851,7 @@ func TestElementHidingHTTPS(t *testing.T) {
 	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`<html><head></head><body>Hello</body></html>`))
+		w.Write([]byte(`<html><head></head><body><div class="ad-banner">Ad</div><p>Hello</p></body></html>`))
 	})
 
 	env := startTestEnv(t, upstream, rs)
@@ -809,10 +867,252 @@ func TestElementHidingHTTPS(t *testing.T) {
 	bodyStr := string(body)
 
 	if !strings.Contains(bodyStr, "<style>") {
-		t.Errorf("HTTPS response should also have CSS injected, got:\n%s", bodyStr)
+		t.Errorf("HTTPS response should have CSS injected, got:\n%s", bodyStr)
 	}
 	if !strings.Contains(bodyStr, ".ad-banner") {
-		t.Errorf("HTTPS response should contain .ad-banner selector, got:\n%s", bodyStr)
+		t.Errorf("CSS should contain .ad-banner selector, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Hello") {
+		t.Errorf("non-ad content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestElementHidingNestedContent(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("##.ad-container")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<div class="ad-container">` +
+			`<div class="inner"><script src="ad.js"></script>` +
+			`<iframe src="ad-network.com/serve"></iframe></div>` +
+			`</div>` +
+			`<p>Keep this</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Element hiding is CSS-only — container stays in DOM but is hidden
+	if !strings.Contains(bodyStr, "<style>") {
+		t.Errorf("should contain CSS injection, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, ".ad-container") {
+		t.Errorf("CSS should contain .ad-container selector, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Keep this") {
+		t.Errorf("non-ad content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestElementHidingVoidElement(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("##.tracking-pixel")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<img class="tracking-pixel" src="track.gif">` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Void element stays in DOM, hidden by CSS
+	if !strings.Contains(bodyStr, "<style>") {
+		t.Errorf("should contain CSS injection, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, ".tracking-pixel") {
+		t.Errorf("CSS should contain .tracking-pixel selector, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("non-ad content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestElementHidingAllSelectorsCSS(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("##div .ad-child") // complex selector
+	rs.AddLine("##.ad-banner")    // simple selector
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head></head><body>` +
+			`<div class="ad-banner">Ad</div>` +
+			`<div><span class="ad-child">Nested ad</span></div>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Both simple and complex selectors should be in CSS
+	if !strings.Contains(bodyStr, "<style>") {
+		t.Errorf("should contain injected style tag, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, ".ad-banner") {
+		t.Errorf("CSS should contain simple selector, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "div .ad-child") {
+		t.Errorf("CSS should contain complex selector, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "display: none !important") {
+		t.Errorf("CSS should use display:none, got:\n%s", bodyStr)
+	}
+
+	// Content elements stay in DOM (CSS hides them)
+	if !strings.Contains(bodyStr, `class="ad-banner"`) {
+		t.Errorf("ad element should remain in DOM, got:\n%s", bodyStr)
+	}
+}
+
+func TestElementHidingByID(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("###sidebar-ad")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<div id="sidebar-ad"><a href="sponsor.html">Sponsor</a></div>` +
+			`<div id="content">Main</div>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// ID selector should be in CSS
+	if !strings.Contains(bodyStr, "<style>") {
+		t.Errorf("should contain CSS injection, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "#sidebar-ad") {
+		t.Errorf("CSS should contain #sidebar-ad selector, got:\n%s", bodyStr)
+	}
+	// Element stays in DOM, hidden by CSS
+	if !strings.Contains(bodyStr, "sponsor.html") {
+		t.Errorf("ad element should remain in DOM (hidden by CSS), got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Main") {
+		t.Errorf("non-ad content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestElementHidingAttributeSelector(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine(`##div[class*="advertisement"]`)
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<div class="top-advertisement-box">Ad</div>` +
+			`<div class="content">Keep</div>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Attribute selector should be in CSS
+	if !strings.Contains(bodyStr, `div[class*="advertisement"]`) {
+		t.Errorf("CSS should contain attribute selector, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "display: none !important") {
+		t.Errorf("CSS should use display:none, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Keep") {
+		t.Errorf("non-matching content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestElementHidingPreservesUnmatchedElements(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("##.ad-banner")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head><title>Test</title></head><body>` +
+			`<div class="content">Keep this</div>` +
+			`<p>Also keep</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// No elements match, so the output should closely match the input
+	// (tokenizer may normalize some whitespace but should preserve content)
+	if !strings.Contains(bodyStr, "Keep this") {
+		t.Errorf("unmatched content should be preserved, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Also keep") {
+		t.Errorf("unmatched content should be preserved, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, "ublproxy") {
+		t.Errorf("no elements should be replaced, got:\n%s", bodyStr)
 	}
 }
 
@@ -847,6 +1147,833 @@ func TestHeadRequestNoInjection(t *testing.T) {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 }
+
+// --- Script stripping tests ---
+
+func TestScriptStrippingBlockedHost(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head>` +
+			`<script src="https://ads.tracker.com/serve.js"></script>` +
+			`<script src="/local/app.js"></script>` +
+			`</head><body><p>Content</p></body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Blocked script should be stripped with a comment
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
+		t.Errorf("blocked script should have replacement comment, got:\n%s", bodyStr)
+	}
+	// The <script> element itself should be gone (no opening tag)
+	if strings.Contains(bodyStr, `<script src="https://ads.tracker.com`) {
+		t.Errorf("blocked script element should be removed, got:\n%s", bodyStr)
+	}
+
+	// Non-blocked script should be preserved
+	if !strings.Contains(bodyStr, "app.js") {
+		t.Errorf("non-blocked script should be preserved, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestScriptStrippingProtocolRelative(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head>` +
+			`<script src="//ads.tracker.com/ad.js"></script>` +
+			`</head><body><p>Content</p></body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Protocol-relative src should be resolved and blocked
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
+		t.Errorf("protocol-relative blocked script should be stripped, got:\n%s", bodyStr)
+	}
+	// The <script> element itself should be gone
+	if strings.Contains(bodyStr, `<script src="//ads.tracker.com`) {
+		t.Errorf("blocked script element should be removed, got:\n%s", bodyStr)
+	}
+}
+
+func TestScriptStrippingInlinePreserved(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head>` +
+			`<script>var x = 1;</script>` +
+			`</head><body><p>Content</p></body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Inline scripts (no src) should not be stripped
+	if !strings.Contains(bodyStr, "var x = 1") {
+		t.Errorf("inline script should be preserved, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, "ublproxy") {
+		t.Errorf("no replacement comment should appear for inline scripts, got:\n%s", bodyStr)
+	}
+}
+
+func TestScriptStrippingWithElementHiding(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+	rs.AddLine("##.ad-banner")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head>` +
+			`<script src="https://ads.tracker.com/ad.js"></script>` +
+			`</head><body>` +
+			`<div class="ad-banner">Ad</div>` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Script should be stripped via URL blocking (src-based)
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
+		t.Errorf("blocked script should be stripped, got:\n%s", bodyStr)
+	}
+
+	// Element hiding should be CSS-only
+	if !strings.Contains(bodyStr, "<style>") {
+		t.Errorf("should contain CSS injection for element hiding, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, ".ad-banner") {
+		t.Errorf("CSS should contain .ad-banner selector, got:\n%s", bodyStr)
+	}
+
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestScriptStrippingHTTPS(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head>` +
+			`<script src="https://ads.tracker.com/serve.js"></script>` +
+			`<script src="/local/app.js"></script>` +
+			`</head><body><p>Content</p></body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpsURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Blocked script should be stripped
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
+		t.Errorf("blocked script should be stripped over HTTPS, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, `<script src="https://ads.tracker.com`) {
+		t.Errorf("blocked script element should be removed, got:\n%s", bodyStr)
+	}
+
+	// Non-blocked script should be preserved
+	if !strings.Contains(bodyStr, "app.js") {
+		t.Errorf("non-blocked script should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestScriptStrippingNoElementHidingRules(t *testing.T) {
+	// Only URL rules, no element hiding rules for any domain.
+	// Script stripping should still work.
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head>` +
+			`<script src="https://ads.tracker.com/ad.js"></script>` +
+			`</head><body><p>Content</p></body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
+		t.Errorf("script stripping should work without element hiding rules, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestScriptStrippingURLPattern(t *testing.T) {
+	// Test that URL pattern rules (not just hostname rules) also strip scripts
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||example.com/ads/*")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head>` +
+			`<script src="https://example.com/ads/tracker.js"></script>` +
+			`<script src="https://example.com/lib/jquery.js"></script>` +
+			`</head><body><p>Content</p></body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Path-matching rule should block the ads script
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
+		t.Errorf("URL pattern should strip matching script, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, `<script src="https://example.com/ads/`) {
+		t.Errorf("blocked script element should be removed, got:\n%s", bodyStr)
+	}
+
+	// Non-matching path should be preserved
+	if !strings.Contains(bodyStr, "jquery.js") {
+		t.Errorf("non-matching script should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+// --- Iframe stripping tests ---
+
+func TestIframeStrippingBlockedHost(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<iframe src="https://ads.tracker.com/ad-frame"></iframe>` +
+			`<iframe src="https://safe.example.com/embed"></iframe>` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Blocked iframe should be stripped
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked iframe") {
+		t.Errorf("blocked iframe should have replacement comment, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, `<iframe src="https://ads.tracker.com`) {
+		t.Errorf("blocked iframe element should be removed, got:\n%s", bodyStr)
+	}
+
+	// Non-blocked iframe should be preserved
+	if !strings.Contains(bodyStr, "safe.example.com/embed") {
+		t.Errorf("non-blocked iframe should be preserved, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestIframeStrippingProtocolRelative(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<iframe src="//ads.tracker.com/embed"></iframe>` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked iframe") {
+		t.Errorf("protocol-relative blocked iframe should be stripped, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, `<iframe src="//ads.tracker.com`) {
+		t.Errorf("blocked iframe element should be removed, got:\n%s", bodyStr)
+	}
+}
+
+func TestIframeStrippingWithScriptStripping(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head>` +
+			`<script src="https://ads.tracker.com/ad.js"></script>` +
+			`</head><body>` +
+			`<iframe src="https://ads.tracker.com/frame"></iframe>` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Both should be stripped
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
+		t.Errorf("blocked script should be stripped, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked iframe") {
+		t.Errorf("blocked iframe should be stripped, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestIframeStrippingHTTPS(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<iframe src="https://ads.tracker.com/ad-frame"></iframe>` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpsURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked iframe") {
+		t.Errorf("blocked iframe should be stripped over HTTPS, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, `<iframe src="https://ads.tracker.com`) {
+		t.Errorf("blocked iframe element should be removed, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+// --- Object and embed stripping tests ---
+
+func TestObjectStrippingBlockedHost(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<object data="https://ads.tracker.com/ad.swf" type="application/x-shockwave-flash"></object>` +
+			`<object data="https://safe.example.com/video.swf" type="application/x-shockwave-flash"></object>` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Blocked object should be stripped
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked object") {
+		t.Errorf("blocked object should have replacement comment, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, `<object data="https://ads.tracker.com`) {
+		t.Errorf("blocked object element should be removed, got:\n%s", bodyStr)
+	}
+
+	// Non-blocked object should be preserved
+	if !strings.Contains(bodyStr, "safe.example.com/video.swf") {
+		t.Errorf("non-blocked object should be preserved, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestObjectStrippingNestedContent(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<object data="https://ads.tracker.com/ad.swf">` +
+			`<param name="movie" value="ad.swf">` +
+			`<p>Fallback content</p>` +
+			`</object>` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Nested content inside blocked object should also be stripped
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked object") {
+		t.Errorf("blocked object should have replacement comment, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, "Fallback content") {
+		t.Errorf("nested content should be stripped with the object, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestEmbedStrippingBlockedHost(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<embed src="https://ads.tracker.com/ad.swf" type="application/x-shockwave-flash">` +
+			`<embed src="https://safe.example.com/video.swf" type="application/x-shockwave-flash">` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Blocked embed should be stripped
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked embed") {
+		t.Errorf("blocked embed should have replacement comment, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, `<embed src="https://ads.tracker.com`) {
+		t.Errorf("blocked embed element should be removed, got:\n%s", bodyStr)
+	}
+
+	// Non-blocked embed should be preserved
+	if !strings.Contains(bodyStr, "safe.example.com/video.swf") {
+		t.Errorf("non-blocked embed should be preserved, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestEmbedStrippingIsVoidElement(t *testing.T) {
+	// Embed is a void element — no closing tag. Verify the tokenizer
+	// handles it correctly without trying to skipUntilClose.
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<embed src="https://ads.tracker.com/ad.swf">` +
+			`<p>After embed</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked embed") {
+		t.Errorf("blocked embed should be stripped, got:\n%s", bodyStr)
+	}
+	// Content after the void embed must be preserved
+	if !strings.Contains(bodyStr, "After embed") {
+		t.Errorf("content after void embed should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestAllBlockableElementsTogether(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head>` +
+			`<script src="https://ads.tracker.com/ad.js"></script>` +
+			`</head><body>` +
+			`<iframe src="https://ads.tracker.com/frame"></iframe>` +
+			`<object data="https://ads.tracker.com/ad.swf"><param name="x" value="y"></object>` +
+			`<embed src="https://ads.tracker.com/ad.swf">` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
+		t.Errorf("blocked script should be stripped, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked iframe") {
+		t.Errorf("blocked iframe should be stripped, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked object") {
+		t.Errorf("blocked object should be stripped, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked embed") {
+		t.Errorf("blocked embed should be stripped, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+// --- Hot-reload tests ---
+
+func TestGetUserRulesLoadsFromDB(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "reload.db")
+	db, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open store: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	// Create a credential and a rule in the database
+	if err := db.SaveCredential("test-cred", []byte("test-pubkey")); err != nil {
+		t.Fatalf("SaveCredential: %v", err)
+	}
+	if _, err := db.CreateRule("test-cred", "/ads/*", ""); err != nil {
+		t.Fatalf("CreateRule: %v", err)
+	}
+
+	caCert, caKey, err := generateCA()
+	if err != nil {
+		t.Fatalf("generateCA: %v", err)
+	}
+	handler := newProxyHandler(newCertCache(caCert, caKey), encodeCertPEM(caCert))
+	handler.store = db
+
+	// No user rules cached yet — getUserRules lazily loads them
+	rules := handler.getUserRules("test-cred")
+	if rules == nil {
+		t.Fatal("getUserRules returned nil")
+	}
+
+	// The rule "/ads/*" should now be loaded
+	ctx := blocklist.MatchContext{}
+	if !rules.ShouldBlockRequest("http://example.com/ads/banner.gif", ctx) {
+		t.Error("/ads/banner.gif should be blocked by user rules")
+	}
+	if rules.ShouldBlockRequest("http://example.com/page.html", ctx) {
+		t.Error("/page.html should not be blocked")
+	}
+
+	// Invalidate and verify re-load works
+	handler.invalidateUserRules("test-cred")
+	rules2 := handler.getUserRules("test-cred")
+	if rules2 == nil {
+		t.Fatal("getUserRules returned nil after invalidation")
+	}
+	if !rules2.ShouldBlockRequest("http://example.com/ads/banner.gif", ctx) {
+		t.Error("re-loaded rules should still block /ads/*")
+	}
+}
+
+func TestReloadBaselineAndUserRulesSeparate(t *testing.T) {
+	// Create a temporary blocklist file
+	tmpDir := t.TempDir()
+	blocklistPath := filepath.Join(tmpDir, "blocklist.txt")
+	os.WriteFile(blocklistPath, []byte("||blocked-host.example.com^\n"), 0644)
+
+	dbPath := filepath.Join(tmpDir, "reload.db")
+	db, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open store: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	// Add a user rule
+	if err := db.SaveCredential("cred1", []byte("pubkey1")); err != nil {
+		t.Fatalf("SaveCredential: %v", err)
+	}
+	_, err = db.CreateRule("cred1", "##.user-ad", "")
+	if err != nil {
+		t.Fatalf("CreateRule: %v", err)
+	}
+
+	caCert, caKey, err := generateCA()
+	if err != nil {
+		t.Fatalf("generateCA: %v", err)
+	}
+	handler := newProxyHandler(newCertCache(caCert, caKey), encodeCertPEM(caCert))
+	handler.store = db
+	handler.blocklistSources = []string{blocklistPath}
+
+	// Reload baseline — should load static blocklist but NOT user rules
+	handler.reloadBaseline()
+
+	baseline := handler.getBaselineRules()
+	if baseline == nil {
+		t.Fatal("getBaselineRules() returned nil after reloadBaseline")
+	}
+
+	// Static blocklist rule should be in baseline
+	if !baseline.IsHostBlocked("blocked-host.example.com") {
+		t.Error("static blocklist hostname should be blocked in baseline")
+	}
+
+	// User element hiding rule should NOT be in baseline
+	eh := baseline.ElementHidingForDomain("example.com")
+	if eh != nil && eh.CSS != "" {
+		t.Error("user element hiding rule should NOT be in baseline")
+	}
+
+	// User rules should be loadable separately
+	userRules := handler.getUserRules("cred1")
+	if userRules == nil {
+		t.Fatal("getUserRules returned nil")
+	}
+	eh = userRules.ElementHidingForDomain("example.com")
+	if eh == nil || eh.CSS == "" {
+		t.Error("user element hiding rule should be loaded in user rules")
+	}
+}
+
+func TestAPIRuleMutationTriggersReload(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "callback.db")
+	db, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open store: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	sm := newSessionMap()
+	api := newAPIHandler(db, testAPIConfig, sm)
+
+	var reloadCount atomic.Int32
+	api.onRulesChanged = func(credentialID string) {
+		reloadCount.Add(1)
+	}
+
+	// Create a credential and session for authenticated requests
+	if err := db.SaveCredential("test-cred-cb", []byte("test-pubkey-cb")); err != nil {
+		t.Fatalf("SaveCredential: %v", err)
+	}
+	sess, err := db.CreateSession("test-cred-cb")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	// Create a rule — should trigger reload
+	rec := doRequest(t, api, "POST", "/api/rules", createRuleRequest{Rule: "##.ad", Domain: "example.com"}, sess.Token)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create rule: status %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	// The reload is async (go a.onRulesChanged()), give it a moment
+	// But since we're in a test with a simple counter, it should complete quickly
+	for i := 0; i < 100; i++ {
+		if reloadCount.Load() >= 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if reloadCount.Load() < 1 {
+		t.Error("onRulesChanged should have been called after create")
+	}
+
+	// Extract rule ID for delete/patch
+	var created ruleResponse
+	decodeJSON(t, rec, &created)
+
+	// Patch rule — should trigger reload
+	rec = doRequest(t, api, "PATCH", fmt.Sprintf("/api/rules/%d", created.ID), patchRuleRequest{Enabled: boolPtr(false)}, sess.Token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch rule: status %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	for i := 0; i < 100; i++ {
+		if reloadCount.Load() >= 2 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if reloadCount.Load() < 2 {
+		t.Error("onRulesChanged should have been called after patch")
+	}
+
+	// Delete rule — should trigger reload
+	rec = doRequest(t, api, "DELETE", fmt.Sprintf("/api/rules/%d", created.ID), nil, sess.Token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete rule: status %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	for i := 0; i < 100; i++ {
+		if reloadCount.Load() >= 3 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if reloadCount.Load() < 3 {
+		t.Error("onRulesChanged should have been called after delete")
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
 
 // --- WebSocket test helpers ---
 
