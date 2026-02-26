@@ -152,8 +152,12 @@ func replaceElements(src []byte, matchers []blocklist.SelectorMatch, sc srcBlock
 
 		case html.StartTagToken:
 			tn, hasAttr := tokenizer.TagName()
-			tagName := string(tn)
-			tagNameLower := strings.ToLower(tagName)
+			tagNameLower := strings.ToLower(string(tn))
+
+			// Save raw bytes before consuming attributes. TagAttr()
+			// causes Raw() to return reconstructed HTML with lowercased
+			// attribute names, which breaks React hydration.
+			rawBytes := copyBytes(tokenizer.Raw())
 
 			// For elements with a blockable resource URL (script, iframe,
 			// object, embed), check if the URL resolves to a blocked
@@ -181,7 +185,7 @@ func replaceElements(src []byte, matchers []blocklist.SelectorMatch, sc srcBlock
 					}
 					continue
 				}
-				buf.Write(tokenizer.Raw())
+				buf.Write(rawBytes)
 				continue
 			}
 
@@ -196,11 +200,12 @@ func replaceElements(src []byte, matchers []blocklist.SelectorMatch, sc srcBlock
 				continue
 			}
 
-			buf.Write(tokenizer.Raw())
+			buf.Write(rawBytes)
 
 		case html.SelfClosingTagToken:
 			tn, hasAttr := tokenizer.TagName()
 			tagNameLower := strings.ToLower(string(tn))
+			rawBytes := copyBytes(tokenizer.Raw())
 
 			if matched, selector := matchesAny(tagNameLower, tokenizer, hasAttr, matchers); matched {
 				replacement := fmt.Sprintf("<div><!-- ublproxy: replaced %s --></div>", selector)
@@ -208,7 +213,7 @@ func replaceElements(src []byte, matchers []blocklist.SelectorMatch, sc srcBlock
 				continue
 			}
 
-			buf.Write(tokenizer.Raw())
+			buf.Write(rawBytes)
 
 		default:
 			buf.Write(tokenizer.Raw())
@@ -266,6 +271,14 @@ func matchesAnyWithAttrs(tagName string, attrs map[string]string, matchers []blo
 	}
 
 	return false, ""
+}
+
+// copyBytes returns a copy of b. The tokenizer's Raw() returns a slice into
+// an internal buffer that is overwritten on the next call, so we must copy.
+func copyBytes(b []byte) []byte {
+	cp := make([]byte, len(b))
+	copy(cp, b)
+	return cp
 }
 
 // collectAttrs reads all attributes from the tokenizer for the current tag.
