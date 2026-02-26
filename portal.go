@@ -11,6 +11,12 @@ func (p *proxyHandler) handlePortal(w http.ResponseWriter, r *http.Request) {
 		p.handlePortalIndex(w, r)
 		return
 	}
+	// Route API requests to the API handler (works on localhost where
+	// HTTPS isn't required for the rule management endpoints)
+	if p.api != nil && len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" {
+		p.api.ServeHTTP(w, r)
+		return
+	}
 	http.NotFound(w, r)
 }
 
