@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 )
@@ -40,9 +41,10 @@ func (h *portalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // startPortalHTTPS starts the HTTPS portal server using a TLS certificate
 // signed by the proxy's CA. The cert is generated for the listen address
 // so clients that trust the CA can connect without warnings.
-func startPortalHTTPS(listenAddr string, host string, certs *certCache, handler *portalHandler) {
-	// Generate a TLS cert for the portal host, signed by our CA
-	cert, err := certs.getCert(host)
+func startPortalHTTPS(listenAddr string, host string, extraIPs []net.IP, certs *certCache, handler *portalHandler) {
+	// Generate a TLS cert that covers the portal hostname, localhost,
+	// 127.0.0.1, and any additional IPs (e.g. the LAN IP).
+	cert, err := certs.portalCert(host, extraIPs...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "portal: failed to generate TLS cert: %v\n", err)
 		os.Exit(1)
