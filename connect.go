@@ -18,7 +18,7 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 		port = "443"
 	}
 	if p.rules.IsHostBlocked(host) {
-		w.WriteHeader(http.StatusNoContent)
+		http.Error(w, "blocked", http.StatusForbidden)
 		return
 	}
 
@@ -131,9 +131,9 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port string) 
 			return
 		}
 
-		// Inject element hiding CSS into HTML responses (skip HEAD — no body to modify)
+		// Replace ad elements in HTML responses (skip HEAD — no body to modify)
 		if req.Method != http.MethodHead {
-			if modified, ok := p.injectElementHidingCSS(resp, host); ok {
+			if modified, ok := p.applyElementHiding(resp, host); ok {
 				resp.Body.Close()
 				resp.Body = io.NopCloser(bytes.NewReader(modified))
 				resp.ContentLength = int64(len(modified))

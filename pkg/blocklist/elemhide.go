@@ -90,12 +90,12 @@ func (r *ElementHideRule) appliesTo(domain string) bool {
 }
 
 // elemHideIndex provides fast lookup for element hiding exception rules
-// by selector, and caches computed CSS per domain.
+// by selector, and caches computed element hiding data per domain.
 type elemHideIndex struct {
 	// exceptions maps CSS selector -> list of exception rules for that selector
 	exceptions map[string][]*ElementHideRule
-	// cssCache stores computed CSS per domain (immutable after RuleSet loading)
-	cssCache sync.Map
+	// cache stores computed ElementHiding per domain (immutable after RuleSet loading)
+	cache sync.Map
 }
 
 func newElemHideIndex() *elemHideIndex {
@@ -121,28 +121,30 @@ func (idx *elemHideIndex) isExcepted(selector, domain string) bool {
 	return false
 }
 
-// CSSForDomain returns a CSS stylesheet that hides all elements matching
-// the element hiding rules for the given domain. Results are cached.
-// Returns empty string if no rules apply. Safe to call on a nil receiver.
-func (rs *RuleSet) CSSForDomain(domain string) string {
+// ElementHidingForDomain returns the element hiding data for the given domain,
+// with selectors classified into simple matchers (for element replacement) and
+// a CSS fallback string (for complex selectors). Results are cached.
+// Safe to call on a nil receiver (returns nil).
+func (rs *RuleSet) ElementHidingForDomain(domain string) *ElementHiding {
 	if rs == nil || rs.elemHideIdx == nil {
-		return ""
+		return nil
 	}
 
 	domain = strings.ToLower(domain)
 
-	// Check cache
-	if cached, ok := rs.elemHideIdx.cssCache.Load(domain); ok {
-		return cached.(string)
+	if cached, ok := rs.elemHideIdx.cache.Load(domain); ok {
+		return cached.(*ElementHiding)
 	}
 
-	css := rs.computeCSSForDomain(domain)
-	rs.elemHideIdx.cssCache.Store(domain, css)
-	return css
+	eh := rs.computeElementHiding(domain)
+	rs.elemHideIdx.cache.Store(domain, eh)
+	return eh
 }
 
-func (rs *RuleSet) computeCSSForDomain(domain string) string {
-	var selectors []string
+func (rs *RuleSet) computeElementHiding(domain string) *ElementHiding {
+	var matchers []SelectorMatch
+	var complexSelectors []string
+
 	for _, rule := range rs.elemHideRules {
 		if rule.Exception || !rule.appliesTo(domain) {
 			continue
@@ -150,12 +152,25 @@ func (rs *RuleSet) computeCSSForDomain(domain string) string {
 		if rs.elemHideIdx.isExcepted(rule.Selector, domain) {
 			continue
 		}
-		selectors = append(selectors, rule.Selector)
+
+		if sm := ClassifySelector(rule.Selector); sm != nil {
+			matchers = append(matchers, *sm)
+		} else {
+			complexSelectors = append(complexSelectors, rule.Selector)
+		}
 	}
 
-	if len(selectors) == 0 {
-		return ""
+	if len(matchers) == 0 && len(complexSelectors) == 0 {
+		return nil
 	}
 
-	return strings.Join(selectors, ",\n") + " {\n  display: none !important;\n}\n"
+	var fallbackCSS string
+	if len(complexSelectors) > 0 {
+		fallbackCSS = strings.Join(complexSelectors, ",\n") + " {\n  display: none !important;\n}\n"
+	}
+
+	return &ElementHiding{
+		Matchers:    matchers,
+		FallbackCSS: fallbackCSS,
+	}
 }

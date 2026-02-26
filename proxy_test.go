@@ -616,7 +616,7 @@ func TestThirdPartyOption(t *testing.T) {
 	}
 }
 
-func TestElementHidingInjectsCSS(t *testing.T) {
+func TestElementHidingReplacesElements(t *testing.T) {
 	rs := blocklist.NewRuleSet()
 	rs.AddLine("##.ad-banner")
 	rs.AddLine("##.tracking-pixel")
@@ -624,7 +624,11 @@ func TestElementHidingInjectsCSS(t *testing.T) {
 	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`<html><head><title>Test</title></head><body><div class="ad-banner">Ad</div></body></html>`))
+		w.Write([]byte(`<html><head><title>Test</title></head><body>` +
+			`<div class="ad-banner"><script src="tracker.js"></script></div>` +
+			`<img class="tracking-pixel" src="pixel.gif">` +
+			`<p>Real content</p>` +
+			`</body></html>`))
 	})
 
 	env := startTestEnv(t, upstream, rs)
@@ -639,23 +643,28 @@ func TestElementHidingInjectsCSS(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	bodyStr := string(body)
 
-	// Should contain injected style tag
-	if !strings.Contains(bodyStr, "<style>") {
-		t.Errorf("response should contain <style> tag, got:\n%s", bodyStr)
+	// Matched elements should be replaced with placeholder divs
+	if !strings.Contains(bodyStr, "<!-- ublproxy: replaced .ad-banner -->") {
+		t.Errorf("response should contain replacement for .ad-banner, got:\n%s", bodyStr)
 	}
-	if !strings.Contains(bodyStr, ".ad-banner") {
-		t.Errorf("response should contain .ad-banner selector, got:\n%s", bodyStr)
-	}
-	if !strings.Contains(bodyStr, ".tracking-pixel") {
-		t.Errorf("response should contain .tracking-pixel selector, got:\n%s", bodyStr)
-	}
-	if !strings.Contains(bodyStr, "display: none !important") {
-		t.Errorf("response should contain 'display: none !important', got:\n%s", bodyStr)
+	if !strings.Contains(bodyStr, "<!-- ublproxy: replaced .tracking-pixel -->") {
+		t.Errorf("response should contain replacement for .tracking-pixel, got:\n%s", bodyStr)
 	}
 
-	// Original content should still be present
+	// The original ad content (script tag, pixel image) should be stripped
+	if strings.Contains(bodyStr, "tracker.js") {
+		t.Errorf("ad content should be stripped, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, "pixel.gif") {
+		t.Errorf("tracking pixel should be stripped, got:\n%s", bodyStr)
+	}
+
+	// Non-ad content should be preserved
 	if !strings.Contains(bodyStr, "<title>Test</title>") {
-		t.Errorf("original content should be preserved, got:\n%s", bodyStr)
+		t.Errorf("title should be preserved, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Real content") {
+		t.Errorf("real content should be preserved, got:\n%s", bodyStr)
 	}
 }
 
@@ -752,7 +761,7 @@ func TestElementHidingBrotli(t *testing.T) {
 	rs := blocklist.NewRuleSet()
 	rs.AddLine("##.ad-banner")
 
-	htmlBody := `<html><head></head><body>Hello</body></html>`
+	htmlBody := `<html><head></head><body><div class="ad-banner">Ad</div><p>Hello</p></body></html>`
 
 	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var buf bytes.Buffer
@@ -778,11 +787,11 @@ func TestElementHidingBrotli(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	bodyStr := string(body)
 
-	if !strings.Contains(bodyStr, "<style>") {
-		t.Errorf("brotli HTML should have CSS injected, got:\n%s", bodyStr)
+	if !strings.Contains(bodyStr, "<!-- ublproxy: replaced .ad-banner -->") {
+		t.Errorf("brotli HTML should have element replaced, got:\n%s", bodyStr)
 	}
-	if !strings.Contains(bodyStr, ".ad-banner") {
-		t.Errorf("brotli HTML should contain .ad-banner selector, got:\n%s", bodyStr)
+	if !strings.Contains(bodyStr, "Hello") {
+		t.Errorf("non-ad content should be preserved, got:\n%s", bodyStr)
 	}
 }
 
@@ -793,7 +802,7 @@ func TestElementHidingHTTPS(t *testing.T) {
 	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`<html><head></head><body>Hello</body></html>`))
+		w.Write([]byte(`<html><head></head><body><div class="ad-banner">Ad</div><p>Hello</p></body></html>`))
 	})
 
 	env := startTestEnv(t, upstream, rs)
@@ -808,11 +817,242 @@ func TestElementHidingHTTPS(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	bodyStr := string(body)
 
-	if !strings.Contains(bodyStr, "<style>") {
-		t.Errorf("HTTPS response should also have CSS injected, got:\n%s", bodyStr)
+	if !strings.Contains(bodyStr, "<!-- ublproxy: replaced .ad-banner -->") {
+		t.Errorf("HTTPS response should have element replaced, got:\n%s", bodyStr)
 	}
-	if !strings.Contains(bodyStr, ".ad-banner") {
-		t.Errorf("HTTPS response should contain .ad-banner selector, got:\n%s", bodyStr)
+	if !strings.Contains(bodyStr, "Hello") {
+		t.Errorf("non-ad content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestElementHidingNestedContent(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("##.ad-container")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<div class="ad-container">` +
+			`<div class="inner"><script src="ad.js"></script>` +
+			`<iframe src="ad-network.com/serve"></iframe></div>` +
+			`</div>` +
+			`<p>Keep this</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// All nested content should be stripped
+	if strings.Contains(bodyStr, "ad.js") {
+		t.Errorf("nested script should be stripped, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, "ad-network.com") {
+		t.Errorf("nested iframe should be stripped, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "<!-- ublproxy: replaced .ad-container -->") {
+		t.Errorf("should contain replacement comment, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Keep this") {
+		t.Errorf("non-ad content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestElementHidingVoidElement(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("##.tracking-pixel")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<img class="tracking-pixel" src="track.gif">` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if strings.Contains(bodyStr, "track.gif") {
+		t.Errorf("void element should be replaced, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "<!-- ublproxy: replaced .tracking-pixel -->") {
+		t.Errorf("should contain replacement comment, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("non-ad content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestElementHidingComplexFallbackCSS(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	// Complex selector (descendant combinator) — falls back to CSS
+	rs.AddLine("##div .ad-child")
+	// Simple selector — element replacement
+	rs.AddLine("##.ad-banner")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head></head><body>` +
+			`<div class="ad-banner">Ad</div>` +
+			`<div><span class="ad-child">Nested ad</span></div>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Simple selector should be replaced
+	if !strings.Contains(bodyStr, "<!-- ublproxy: replaced .ad-banner -->") {
+		t.Errorf("simple selector should be replaced, got:\n%s", bodyStr)
+	}
+
+	// Complex selector should fall back to CSS injection
+	if !strings.Contains(bodyStr, "<style>") {
+		t.Errorf("complex selector should inject style tag, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "div .ad-child") {
+		t.Errorf("fallback CSS should contain the complex selector, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "display: none !important") {
+		t.Errorf("fallback CSS should use display:none, got:\n%s", bodyStr)
+	}
+}
+
+func TestElementHidingByID(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("###sidebar-ad")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<div id="sidebar-ad"><a href="sponsor.html">Sponsor</a></div>` +
+			`<div id="content">Main</div>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "<!-- ublproxy: replaced #sidebar-ad -->") {
+		t.Errorf("element with matching ID should be replaced, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, "sponsor.html") {
+		t.Errorf("ad content should be stripped, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Main") {
+		t.Errorf("non-ad content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestElementHidingAttributeSelector(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine(`##div[class*="advertisement"]`)
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<div class="top-advertisement-box">Ad</div>` +
+			`<div class="content">Keep</div>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, `<!-- ublproxy: replaced div[class*="advertisement"] -->`) {
+		t.Errorf("attribute selector should match, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Keep") {
+		t.Errorf("non-matching content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestElementHidingPreservesUnmatchedElements(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("##.ad-banner")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head><title>Test</title></head><body>` +
+			`<div class="content">Keep this</div>` +
+			`<p>Also keep</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// No elements match, so the output should closely match the input
+	// (tokenizer may normalize some whitespace but should preserve content)
+	if !strings.Contains(bodyStr, "Keep this") {
+		t.Errorf("unmatched content should be preserved, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Also keep") {
+		t.Errorf("unmatched content should be preserved, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, "ublproxy") {
+		t.Errorf("no elements should be replaced, got:\n%s", bodyStr)
 	}
 }
 

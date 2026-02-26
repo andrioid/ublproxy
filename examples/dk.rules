@@ -1,0 +1,34 @@
+[Adblock Plus 2.0]
+! Danish website adblock rules
+! For testing ublproxy element replacement
+
+! ---- Hostname blocking (ad networks and trackers) ----
+
+||functions.adnami.io^
+||macro.adnami.io^
+||gum.criteo.com^
+||ssp-sync.criteo.com^
+||ads.pubmatic.com^
+||eus.rubiconproject.com^
+||ssum-sec.casalemedia.com^
+||js-sec.indexww.com^
+||cm.g.doubleclick.net^
+||9909783.fls.doubleclick.net^
+||ls.hit.gemius.pl^
+||cdn.cxense.com^
+||static.criteo.net^
+
+! ---- Element hiding (bt.dk) ----
+
+! Banner ad slots (DFP/Google Ad Manager)
+bt.dk##.banner
+
+! Adnami skin/wallpaper ads
+bt.dk##.adsm-sticky-wrapper
+bt.dk##.adsm-wallpaper
+bt.dk##.adsm-contentBackground
+bt.dk##.adsm-wallpaper-l
+bt.dk##.adsm-wallpaper-r
+
+! "Annonce" label above ads
+bt.dk##.no-annonce

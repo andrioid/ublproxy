@@ -55,9 +55,9 @@ func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// Inject element hiding CSS into HTML responses (skip HEAD — no body to modify)
+	// Replace ad elements in HTML responses (skip HEAD — no body to modify)
 	if r.Method != http.MethodHead {
-		if modified, ok := p.injectElementHidingCSS(resp, r.URL.Hostname()); ok {
+		if modified, ok := p.applyElementHiding(resp, r.URL.Hostname()); ok {
 			copyHeaders(w.Header(), resp.Header)
 			removeHopByHopHeaders(w.Header())
 			w.Header().Del("Content-Length")
