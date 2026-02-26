@@ -5,7 +5,7 @@
 - [Mise](https://mise.jdx.dev) (recommended) — manages Go version and project tasks
 - Go 1.25 or later (installed automatically by Mise, or manually)
 
-No third-party dependencies — the project uses only the Go standard library.
+Dependencies are minimal — see `go.mod`.
 
 ## Getting started with Mise
 
@@ -56,87 +56,67 @@ On first run, a CA certificate and key are generated in the `--ca-dir` directory
 
 ### Manual testing with curl
 
+Start the proxy with a blocklist, then use curl to verify behaviour:
+
+```sh
+# Terminal 1: start the proxy
+mise run dev -- --blocklist examples/is.rules
+```
+
 ```sh
 # Plain HTTP
 curl --proxy http://127.0.0.1:8080 http://example.com
 
 # HTTPS (trusting the generated CA)
 curl --proxy http://127.0.0.1:8080 --cacert ~/.ublproxy/ca.crt https://example.com
-```
 
-## Testing with Playwright
-
-Playwright lets you test the proxy in a real browser — verifying both request blocking and element hiding CSS injection against live websites.
-
-### Setup
-
-Start the proxy with a blocklist, then open browsers with and without the proxy:
-
-```sh
-# Terminal 1: start the proxy with Icelandic adblock rules
-mise run dev -- --blocklist examples/is.rules
-
-# Terminal 2: open a browser routed through the proxy
-mise run browser -- https://1819.is
-
-# Optional: open a second browser without the proxy for comparison
-mise run browser-no-proxy -- https://1819.is
-```
-
-The `browser` script sets `PLAYWRIGHT_MCP_PROXY_SERVER` and `PLAYWRIGHT_MCP_IGNORE_HTTPS_ERRORS` environment variables so all traffic routes through the proxy and the browser accepts the proxy's MITM certificates.
-
-Both scripts create named sessions (`proxy` and `no-proxy`), so you interact with them using `playwright-cli -s=proxy <command>` and `playwright-cli -s=no-proxy <command>`.
-
-### Verifying element hiding
-
-Check that the proxy injected a `<style>` tag with ad-hiding CSS:
-
-```sh
-playwright-cli -s=proxy eval "() => {
-  const injected = [...document.querySelectorAll('style')].filter(s =>
-    s.textContent.includes('display: none !important')
-  );
-  return { found: injected.length > 0, css: injected.map(s => s.textContent).join('') };
-}"
+# HTTPS (skip certificate verification — quick and dirty)
+curl --proxy http://127.0.0.1:8080 -k https://example.com
 ```
 
 ### Verifying request blocking
 
-Use the network log to see which requests were blocked by the proxy:
+Blocked hostnames return 403 for HTTPS (CONNECT) requests:
 
 ```sh
-playwright-cli -s=proxy network
+curl -v --proxy http://127.0.0.1:8080 -k https://ads.example.com 2>&1 | grep "< HTTP"
+# Expected: HTTP/1.1 403 Forbidden
 ```
 
-Requests to blocked domains (e.g. `kynning.olis.is`, `openad.visir.is`) should appear as failed.
+### Verifying element replacement
 
-### Taking comparison screenshots
+Matched elements are replaced with `<!-- ublproxy: replaced .selector -->` comments. Check for them in the HTML output:
 
 ```sh
-playwright-cli -s=proxy screenshot --filename=tmp/with-proxy.png
-playwright-cli -s=no-proxy screenshot --filename=tmp/without-proxy.png
+curl -s --proxy http://127.0.0.1:8080 -k https://some-site.com \
+  | grep 'ublproxy: replaced'
 ```
 
-### Cleanup
+### Verifying CSS fallback
+
+Complex selectors that can't be matched on a single element fall back to CSS `display: none` injection. Check for the injected style tag:
 
 ```sh
-playwright-cli -s=proxy close
-playwright-cli -s=no-proxy close
+curl -s --proxy http://127.0.0.1:8080 -k https://some-site.com \
+  | grep 'display: none'
 ```
 
-### Testing other sites
-
-The `is.rules` blocklist covers many Icelandic sites. Try any of them:
+### Comparing proxy vs direct
 
 ```sh
-playwright-cli -s=proxy goto https://visir.is
-playwright-cli -s=proxy goto https://dv.is
+# Through the proxy
+curl -s --proxy http://127.0.0.1:8080 -k https://some-site.com > tmp/with-proxy.html
+
+# Direct
+curl -s https://some-site.com --compressed > tmp/without-proxy.html
+
+diff tmp/without-proxy.html tmp/with-proxy.html
 ```
 
-You can also combine multiple blocklists:
+### Combining blocklists
 
 ```sh
-mise run dev -- --blocklist examples/is.rules --blocklist examples/dev.rules
+mise run dev -- --blocklist examples/is.rules --blocklist examples/dk.rules
 ```
 
 ## Testing
@@ -169,10 +149,11 @@ Proxy code lives in `package main` in the project root. The `pkg/` directory con
 | `proxy.go` | Top-level HTTP handler, dispatches to HTTP or CONNECT handler |
 | `http.go` | Plain HTTP request forwarding, hop-by-hop header stripping |
 | `connect.go` | CONNECT method handling, TLS MITM, request forwarding |
+| `elemhide_inject.go` | HTML element replacement and CSS fallback injection |
 | `portal.go` | Direct-access page with CA cert download and install instructions |
 | `log.go` | Request and error logging to stderr |
 | `proxy_test.go` | End-to-end tests for both HTTP and HTTPS proxy flows |
-| `pkg/blocklist/` | Blocklist parsing (adblock + hosts-file) and hostname matching |
+| `pkg/blocklist/` | Blocklist parsing (adblock + hosts-file), hostname matching, element hiding |
 | `scripts/build` | Build task |
 | `scripts/test` | Test task |
 | `scripts/dev` | Build + run task for development |
@@ -183,4 +164,4 @@ Proxy code lives in `package main` in the project root. The `pkg/` directory con
 - Early returns, no `if/else` chains
 - Descriptive names using domain wording
 - Comments explain *why*, not *what*
-- No third-party dependencies unless strongly warranted
+- Minimal dependencies — warranted additions only

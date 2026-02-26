@@ -1,5 +1,4 @@
 ublproxy
 *.test
 mise.local.toml
-.playwright-cli/
 tmp/

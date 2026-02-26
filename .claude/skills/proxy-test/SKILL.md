@@ -1,37 +1,21 @@
 ---
 name: proxy-test
-description: Verify ublproxy ad-blocking behavior by comparing browser sessions with and without the proxy. Use when the user asks to test, verify, or compare proxy behavior against a website.
-allowed-tools: Bash(playwright-cli:*), Bash(mise:*), Bash(curl:*), Bash(grep:*)
+description: Verify ublproxy ad-blocking behavior by comparing responses with and without the proxy using curl. Use when the user asks to test, verify, or compare proxy behavior against a website.
+allowed-tools: Bash(curl:*), Bash(mise:*), Bash(diff:*)
 ---
 
-# Verifying Proxy Behavior with Playwright
+# Verifying Proxy Behavior with curl
 
-Test ublproxy's ad-blocking (request blocking + element hiding CSS injection) by comparing two browser sessions: one routed through the proxy and one without.
+Test ublproxy's ad-blocking (request blocking, element replacement, and CSS fallback injection) by comparing curl responses with and without the proxy.
 
 ## Prerequisites
 
-The proxy must be running with a blocklist before opening the browser:
+The proxy must be running with a blocklist:
 
 ```bash
-# Start the proxy with the Icelandic adblock rules
+# Start the proxy with adblock rules
 mise run dev -- --blocklist examples/is.rules
 ```
-
-## Opening browsers
-
-Open two named browser sessions — one through the proxy, one without:
-
-```bash
-# Through the proxy (requires proxy to be running)
-mise run browser -- https://example.is
-
-# Without the proxy (for comparison)
-mise run browser-no-proxy -- https://example.is
-```
-
-The `proxy` session routes all traffic through `http://127.0.0.1:8080` and ignores HTTPS certificate errors (so the proxy's MITM certificates are accepted without trusting the CA).
-
-After opening, interact with either session using `playwright-cli -s=proxy <command>` or `playwright-cli -s=no-proxy <command>`.
 
 ## Verification workflow
 
@@ -44,129 +28,73 @@ Before testing, check what rules the blocklist has for the target domain:
 grep "example.is##" examples/is.rules
 
 # URL blocking rules (||)
-grep "||.*example.is" examples/is.rules
+grep "||.*example" examples/is.rules
 
 # Global element hiding rules (apply to all domains)
 grep "^##" examples/is.rules
 ```
 
-### 2. Verify CSS injection
+### 2. Verify request blocking
 
-The proxy injects a `<style>` tag into HTML responses containing `display: none !important` rules. Check that it exists:
-
-```bash
-# With proxy — should find injected style tag
-playwright-cli -s=proxy eval "() => {
-  const injected = [...document.querySelectorAll('style')].filter(s =>
-    s.textContent.includes('display: none !important')
-  );
-  return {
-    found: injected.length > 0,
-    css: injected.map(s => s.textContent).join('')
-  };
-}"
-
-# Without proxy — should find nothing
-playwright-cli -s=no-proxy eval "() => {
-  const injected = [...document.querySelectorAll('style')].filter(s =>
-    s.textContent.includes('display: none !important')
-  );
-  return { found: injected.length > 0 };
-}"
-```
-
-### 3. Verify element hiding
-
-Using the selectors found in step 1, check that targeted elements are hidden. For each domain-specific element hiding rule like `example.is##.ad-banner`, check the selector:
+Blocked hostnames return 403 for HTTPS (CONNECT) requests:
 
 ```bash
-playwright-cli -s=proxy eval "() => {
-  const selector = '.ad-banner';
-  const els = document.querySelectorAll(selector);
-  return {
-    selector,
-    count: els.length,
-    allHidden: [...els].every(el =>
-      window.getComputedStyle(el).display === 'none'
-    )
-  };
-}"
+curl -v --proxy http://127.0.0.1:8080 -k https://blocked-domain.com 2>&1 | grep "< HTTP"
+# Expected: HTTP/1.1 403 Forbidden
 ```
 
-If `count` is 0, the element doesn't exist on the page (the site may have been redesigned since the rules were written). If `count` > 0 and `allHidden` is true, the proxy is successfully hiding them.
+### 3. Verify element replacement
 
-### 4. Verify request blocking
-
-Check the network log for failed requests to blocked domains:
+Matched elements are replaced with `<!-- ublproxy: replaced .selector -->` comments. Check for them in the HTML output:
 
 ```bash
-playwright-cli -s=proxy network
+curl -s --proxy http://127.0.0.1:8080 -k https://example.is | grep 'ublproxy: replaced'
 ```
 
-Requests to domains matching `||` rules in the blocklist (e.g. `openad.visir.is`, `kynning.olis.is`) should appear as failed. Compare with the no-proxy session where the same requests succeed:
+### 4. Verify CSS fallback injection
+
+Complex selectors that can't be matched on a single element fall back to CSS `display: none` injection. Check for the injected style tag:
 
 ```bash
-playwright-cli -s=no-proxy network
+curl -s --proxy http://127.0.0.1:8080 -k https://example.is | grep 'display: none'
 ```
 
-### 5. Take comparison screenshots
+### 5. Compare proxy vs direct
+
+Save responses and diff them to see exactly what the proxy changed:
 
 ```bash
-playwright-cli -s=proxy screenshot --filename=tmp/with-proxy.png
-playwright-cli -s=no-proxy screenshot --filename=tmp/without-proxy.png
+curl -s --proxy http://127.0.0.1:8080 -k https://example.is > tmp/with-proxy.html
+curl -s https://example.is --compressed > tmp/without-proxy.html
+diff tmp/without-proxy.html tmp/with-proxy.html
 ```
 
-## Cleanup
-
-```bash
-playwright-cli -s=proxy close
-playwright-cli -s=no-proxy close
-```
-
-## Example: testing against 1819.is
+## Example: testing against an Icelandic site
 
 ```bash
 # Terminal 1: start proxy
 mise run dev -- --blocklist examples/is.rules
 
-# Terminal 2: open browsers
-mise run browser -- https://1819.is
-mise run browser-no-proxy -- https://1819.is
-
-# Check what rules apply
+# Terminal 2: check what rules apply
 grep "1819.is" examples/is.rules
-# 1819.is##.augl-wrapper
-# 1819.is##.side-augl-wrapper
-# 1819.is##.augl.augl-size-1018
 
-# Verify injection in proxy session
-playwright-cli -s=proxy eval "() => {
-  const injected = [...document.querySelectorAll('style')].filter(s =>
-    s.textContent.includes('display: none !important')
-  );
-  return { found: injected.length > 0, css: injected.map(s => s.textContent).join('') };
-}"
+# Compare responses
+curl -s --proxy http://127.0.0.1:8080 -k https://1819.is > tmp/with-proxy.html
+curl -s https://1819.is --compressed > tmp/without-proxy.html
 
-# Verify no injection without proxy
-playwright-cli -s=no-proxy eval "() => {
-  return [...document.querySelectorAll('style')].filter(s =>
-    s.textContent.includes('display: none !important')
-  ).length;
-}"
+# Check for element replacements
+grep 'ublproxy: replaced' tmp/with-proxy.html
 
-# Compare screenshots
-playwright-cli -s=proxy screenshot --filename=tmp/1819-with-proxy.png
-playwright-cli -s=no-proxy screenshot --filename=tmp/1819-without-proxy.png
+# Check for CSS fallback injection
+grep 'display: none' tmp/with-proxy.html
 
-# Cleanup
-playwright-cli -s=proxy close
-playwright-cli -s=no-proxy close
+# Diff to see all changes
+diff tmp/without-proxy.html tmp/with-proxy.html
 ```
 
 ## Troubleshooting
 
 - **"proxy is not running"** — start the proxy first with `mise run dev -- --blocklist examples/is.rules`
-- **Navigation timeout** — the target site may be down. Try `curl --max-time 5 https://example.is` to verify reachability.
-- **Cloudflare challenge page** — some sites (e.g. mbl.is) block headless browsers. The page title will be "Just a moment...". Try a different site or use `--headed` mode.
-- **No injected style tag** — the page may not be HTML, or the response may use zstd compression (not yet supported for injection).
-- **Elements not found** — the site may have been redesigned since the blocklist rules were written. The CSS is still injected, but the selectors no longer match anything.
+- **Connection refused** — verify the proxy is listening: `curl --proxy http://127.0.0.1:8080 http://example.com`
+- **No element replacements or CSS injection** — the page may not be HTML, or the response may use zstd compression (not yet supported). Check `Content-Encoding` with `curl -D-`.
+- **Elements not found** — the site may have been redesigned since the blocklist rules were written. The selectors may no longer match anything in the server-rendered HTML (some elements are only added by JavaScript at runtime).
