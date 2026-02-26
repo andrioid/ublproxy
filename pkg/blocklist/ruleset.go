@@ -199,7 +199,10 @@ func (rs *RuleSet) ShouldBlockRequest(rawURL string, ctx MatchContext) bool {
 
 	// Pre-lowercase once to avoid redundant ToLower in each rule match
 	lowerURL := strings.ToLower(rawURL)
-	lowerCtx := MatchContext{PageDomain: strings.ToLower(ctx.PageDomain)}
+	lowerCtx := MatchContext{
+		PageDomain:   strings.ToLower(ctx.PageDomain),
+		ResourceType: ctx.ResourceType,
+	}
 	host := extractHostFromURL(lowerURL)
 
 	blocked := false

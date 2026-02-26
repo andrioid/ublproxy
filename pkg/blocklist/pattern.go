@@ -19,18 +19,41 @@ const (
 	segSeparator                    // match a single separator char or end of string
 )
 
+// ResourceType is a bitmask representing the type of a network request.
+// Rules can restrict which types they apply to using options like $script,
+// $image, etc. A zero value means "unknown" and matches any type constraint.
+type ResourceType int
+
+const (
+	ResourceDocument       ResourceType = 1 << iota // top-level page navigation
+	ResourceScript                                  // JavaScript files
+	ResourceStylesheet                              // CSS files
+	ResourceImage                                   // images (png, jpg, gif, svg, webp, ico, etc.)
+	ResourceFont                                    // web fonts (woff, woff2, ttf, otf, eot)
+	ResourceXMLHTTPRequest                          // XHR / fetch requests
+	ResourceSubdocument                             // iframes, frames
+	ResourceMedia                                   // audio, video
+	ResourceWebSocket                               // WebSocket connections
+	ResourceObject                                  // plugins (object, embed)
+	ResourcePopup                                   // popup windows (not enforceable at proxy level)
+	ResourceOther                                   // anything not covered above
+)
+
 // MatchContext provides additional information about a request for evaluating
-// context-dependent filter options like $third-party and $domain.
+// context-dependent filter options like $third-party, $domain, and $script.
 type MatchContext struct {
-	PageDomain string // domain of the page that initiated the request (from Referer)
+	PageDomain   string       // domain of the page that initiated the request (from Referer)
+	ResourceType ResourceType // type of the network request (0 = unknown, matches any)
 }
 
 // Options holds parsed filter options from the $... suffix of a rule.
 type Options struct {
-	MatchCase      bool     // $match-case: case-sensitive matching
-	ThirdParty     *bool    // $third-party (true) or $~third-party (false), nil if unset
-	IncludeDomains []string // $domain=example.com|other.com
-	ExcludeDomains []string // $domain=~example.com
+	MatchCase      bool         // $match-case: case-sensitive matching
+	ThirdParty     *bool        // $third-party (true) or $~third-party (false), nil if unset
+	IncludeDomains []string     // $domain=example.com|other.com
+	ExcludeDomains []string     // $domain=~example.com
+	IncludeTypes   ResourceType // bitmask of types this rule applies to (0 = all types)
+	ExcludeTypes   ResourceType // bitmask of negated types ($~script, $~image)
 }
 
 // Rule represents a compiled adblock filter pattern.
@@ -86,10 +109,45 @@ func Compile(pattern string) (*Rule, error) {
 	return r, nil
 }
 
+// resourceTypeOption maps adblock option names to ResourceType constants.
+var resourceTypeOption = map[string]ResourceType{
+	"document":          ResourceDocument,
+	"script":            ResourceScript,
+	"stylesheet":        ResourceStylesheet,
+	"image":             ResourceImage,
+	"font":              ResourceFont,
+	"xmlhttprequest":    ResourceXMLHTTPRequest,
+	"subdocument":       ResourceSubdocument,
+	"media":             ResourceMedia,
+	"websocket":         ResourceWebSocket,
+	"object":            ResourceObject,
+	"popup":             ResourcePopup,
+	"other":             ResourceOther,
+	"object-subrequest": ResourceObject, // legacy alias
+}
+
 func parseOptions(optStr string) Options {
 	var opts Options
 	for _, opt := range strings.Split(optStr, ",") {
 		opt = strings.TrimSpace(opt)
+		if opt == "" {
+			continue
+		}
+
+		// Check for negated resource type (~script, ~image, etc.)
+		if strings.HasPrefix(opt, "~") {
+			if rt, ok := resourceTypeOption[opt[1:]]; ok {
+				opts.ExcludeTypes |= rt
+				continue
+			}
+		}
+
+		// Check for positive resource type (script, image, etc.)
+		if rt, ok := resourceTypeOption[opt]; ok {
+			opts.IncludeTypes |= rt
+			continue
+		}
+
 		switch {
 		case opt == "match-case":
 			opts.MatchCase = true
@@ -109,6 +167,8 @@ func parseOptions(optStr string) Options {
 					opts.IncludeDomains = append(opts.IncludeDomains, strings.ToLower(d))
 				}
 			}
+			// Silently ignore options we can't enforce at proxy level:
+			// $csp=, $rewrite=, $generichide, $genericblock, $elemhide
 		}
 	}
 	return opts
@@ -258,22 +318,39 @@ func (r *Rule) DomainAnchor() bool { return r.domainAnchor }
 func (r *Rule) DomainSuffix() string { return r.domainSuffix }
 
 // HasContextOptions returns true if the rule has options that require
-// a MatchContext to evaluate (e.g. $third-party, $domain).
+// a MatchContext to evaluate (e.g. $third-party, $domain, $script).
 func (r *Rule) HasContextOptions() bool {
 	return r.options.ThirdParty != nil ||
 		len(r.options.IncludeDomains) > 0 ||
-		len(r.options.ExcludeDomains) > 0
+		len(r.options.ExcludeDomains) > 0 ||
+		r.options.IncludeTypes != 0 ||
+		r.options.ExcludeTypes != 0
 }
 
 func (r *Rule) checkOptions(rawURL string, ctx MatchContext) bool {
 	lowerURL := strings.ToLower(rawURL)
-	lowerCtx := MatchContext{PageDomain: strings.ToLower(ctx.PageDomain)}
+	lowerCtx := MatchContext{
+		PageDomain:   strings.ToLower(ctx.PageDomain),
+		ResourceType: ctx.ResourceType,
+	}
 	return r.checkOptionsLower(lowerURL, lowerCtx)
 }
 
 // checkOptionsLower evaluates context-dependent options using pre-lowercased
 // URL and context to avoid redundant ToLower calls in hot paths.
 func (r *Rule) checkOptionsLower(lowerURL string, ctx MatchContext) bool {
+	// Resource type filtering: when the rule specifies types and we know
+	// the request type, check the bitmask. Unknown type (0) matches any
+	// constraint for backward compatibility.
+	if ctx.ResourceType != 0 {
+		if r.options.IncludeTypes != 0 && ctx.ResourceType&r.options.IncludeTypes == 0 {
+			return false
+		}
+		if r.options.ExcludeTypes != 0 && ctx.ResourceType&r.options.ExcludeTypes != 0 {
+			return false
+		}
+	}
+
 	if r.options.ThirdParty != nil {
 		requestDomain := extractHostFromURL(lowerURL)
 		isThirdParty := !domainMatchesOrIsSubdomain(requestDomain, ctx.PageDomain)

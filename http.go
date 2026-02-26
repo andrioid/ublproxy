@@ -23,7 +23,7 @@ var hopByHopHeaders = []string{
 }
 
 func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx := matchContextFromReferer(r.Header.Get("Referer"))
+	ctx := matchContextFromRequest(r)
 	if p.rules.ShouldBlockRequest(r.URL.String(), ctx) {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -144,17 +144,23 @@ func (p *proxyHandler) handleHTTPUpgrade(w http.ResponseWriter, r *http.Request)
 	bidirectionalCopy(clientConn, upstreamConn)
 }
 
-// matchContextFromReferer extracts the page domain from the Referer header
-// for evaluating context-dependent filter options ($third-party, $domain).
-func matchContextFromReferer(referer string) blocklist.MatchContext {
+// matchContextFromRequest builds a MatchContext from the HTTP request,
+// extracting the page domain (from Referer) and resource type (from
+// Sec-Fetch-Dest, Accept header, or URL extension).
+func matchContextFromRequest(req *http.Request) blocklist.MatchContext {
+	ctx := blocklist.MatchContext{
+		ResourceType: blocklist.InferResourceType(req),
+	}
+	referer := req.Header.Get("Referer")
 	if referer == "" {
-		return blocklist.MatchContext{}
+		return ctx
 	}
 	parsed, err := url.Parse(referer)
 	if err != nil {
-		return blocklist.MatchContext{}
+		return ctx
 	}
-	return blocklist.MatchContext{PageDomain: parsed.Hostname()}
+	ctx.PageDomain = parsed.Hostname()
+	return ctx
 }
 
 func copyHeaders(dst, src http.Header) {
