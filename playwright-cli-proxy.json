@@ -3,7 +3,8 @@
     "contextOptions": {
       "ignoreHTTPSErrors": true,
       "proxy": {
-        "server": "http://127.0.0.1:8080"
+        "server": "http://127.0.0.1:8080",
+        "bypass": "localhost,127.0.0.1,<-loopback>"
       }
     }
   }

@@ -99,6 +99,12 @@ func (a *apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Subscription routes
+	if strings.HasPrefix(path, "/subscriptions") {
+		a.routeSubscriptions(w, r, path, sess)
+		return
+	}
+
 	http.NotFound(w, r)
 }
 

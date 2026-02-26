@@ -72,4 +72,20 @@ CREATE TABLE IF NOT EXISTS rules (
 	enabled       INTEGER NOT NULL DEFAULT 1,
 	created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS blocklist_subscriptions (
+	id            INTEGER PRIMARY KEY,
+	credential_id TEXT NOT NULL REFERENCES credentials(id),
+	url           TEXT NOT NULL,
+	name          TEXT NOT NULL DEFAULT '',
+	enabled       INTEGER NOT NULL DEFAULT 1,
+	created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+	UNIQUE(credential_id, url)
+);
+
+CREATE TABLE IF NOT EXISTS blocklist_cache (
+	url        TEXT PRIMARY KEY,
+	content    BLOB NOT NULL,
+	fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `

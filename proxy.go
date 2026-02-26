@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -56,29 +57,40 @@ func (p *proxyHandler) getRules() *blocklist.RuleSet {
 	return p.rules.Load()
 }
 
-// reloadRules rebuilds the in-memory RuleSet from static blocklists and
-// user-created rules in the database. Called after any rule mutation.
+// blocklistCacheTTL is how long a cached blocklist download is considered
+// fresh. Stale entries are re-downloaded on next reload.
+const blocklistCacheTTL = 24 * time.Hour
+
+// reloadRules rebuilds the in-memory RuleSet from static blocklists,
+// user-subscribed blocklists, and user-created rules. Remote URLs are
+// cached in the database to avoid re-downloading on every rule change.
 func (p *proxyHandler) reloadRules() {
 	p.reloadMu.Lock()
 	defer p.reloadMu.Unlock()
 
 	rs := blocklist.NewRuleSet()
 
-	// Reload static blocklists
+	// Reload static blocklists (CLI --blocklist flags)
 	for _, src := range p.blocklistSources {
-		var err error
-		if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
-			err = rs.LoadURL(src)
-		} else {
-			err = rs.LoadFile(src)
-		}
-		if err != nil {
+		if err := p.loadBlocklistSource(rs, src); err != nil {
 			fmt.Fprintf(os.Stderr, "reload: failed to load blocklist %s: %v\n", src, err)
 		}
 	}
 
-	// Add user-created rules from the database
 	if p.store != nil {
+		// Load user-subscribed blocklist URLs
+		subURLs, err := p.store.ListAllEnabledSubscriptionURLs()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "reload: failed to load subscription urls: %v\n", err)
+		} else {
+			for _, url := range subURLs {
+				if err := p.loadBlocklistSource(rs, url); err != nil {
+					fmt.Fprintf(os.Stderr, "reload: failed to load subscription %s: %v\n", url, err)
+				}
+			}
+		}
+
+		// Add user-created rules from the database
 		dbRules, err := p.store.ListAllEnabledRules()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "reload: failed to load user rules: %v\n", err)
@@ -91,6 +103,70 @@ func (p *proxyHandler) reloadRules() {
 
 	// Atomic swap — all concurrent readers immediately see the new rules
 	p.rules.Store(rs)
+}
+
+// loadBlocklistSource loads a blocklist from a file path or URL into the
+// RuleSet. Remote URLs are cached in the database with a 24-hour TTL.
+func (p *proxyHandler) loadBlocklistSource(rs *blocklist.RuleSet, src string) error {
+	if !strings.HasPrefix(src, "http://") && !strings.HasPrefix(src, "https://") {
+		return rs.LoadFile(src)
+	}
+	return p.loadBlocklistURL(rs, src)
+}
+
+// loadBlocklistURL loads a remote blocklist, using the DB cache when
+// available and fresh. Downloads and caches when stale or missing.
+func (p *proxyHandler) loadBlocklistURL(rs *blocklist.RuleSet, url string) error {
+	// Try cache first
+	if p.store != nil {
+		cached, err := p.store.GetCachedBlocklist(url)
+		if err == nil && cached != nil && time.Since(cached.FetchedAt) < blocklistCacheTTL {
+			return rs.LoadReader(strings.NewReader(string(cached.Content)))
+		}
+	}
+
+	// Download fresh
+	content, err := downloadBlocklist(url)
+	if err != nil {
+		// Fall back to stale cache if download fails
+		if p.store != nil {
+			cached, cacheErr := p.store.GetCachedBlocklist(url)
+			if cacheErr == nil && cached != nil {
+				fmt.Fprintf(os.Stderr, "reload: using stale cache for %s (download failed: %v)\n", url, err)
+				return rs.LoadReader(strings.NewReader(string(cached.Content)))
+			}
+		}
+		return err
+	}
+
+	// Save to cache
+	if p.store != nil {
+		if cacheErr := p.store.SetCachedBlocklist(url, content); cacheErr != nil {
+			fmt.Fprintf(os.Stderr, "reload: failed to cache %s: %v\n", url, cacheErr)
+		}
+	}
+
+	return rs.LoadReader(strings.NewReader(string(content)))
+}
+
+// downloadBlocklist fetches a blocklist URL and returns its raw content.
+func downloadBlocklist(url string) ([]byte, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetch %s: HTTP %d", url, resp.StatusCode)
+	}
+	// Limit to 50MB to prevent memory exhaustion
+	body := http.MaxBytesReader(nil, resp.Body, 50<<20)
+	var buf strings.Builder
+	if _, err := io.Copy(&buf, body); err != nil {
+		return nil, fmt.Errorf("read %s: %w", url, err)
+	}
+	return []byte(buf.String()), nil
 }
 
 func (p *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
