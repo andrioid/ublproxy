@@ -3,6 +3,8 @@
 ! For testing ublproxy element replacement
 
 ! ---- Hostname blocking (ad networks and trackers) ----
+! Scripts with src matching these hostnames are also stripped from HTML
+! responses, providing defense-in-depth alongside network-level blocking.
 
 ||functions.adnami.io^
 ||macro.adnami.io^

@@ -1088,6 +1088,637 @@ func TestHeadRequestNoInjection(t *testing.T) {
 	}
 }
 
+// --- Script stripping tests ---
+
+func TestScriptStrippingBlockedHost(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head>` +
+			`<script src="https://ads.tracker.com/serve.js"></script>` +
+			`<script src="/local/app.js"></script>` +
+			`</head><body><p>Content</p></body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Blocked script should be stripped with a comment
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
+		t.Errorf("blocked script should have replacement comment, got:\n%s", bodyStr)
+	}
+	// The <script> element itself should be gone (no opening tag)
+	if strings.Contains(bodyStr, `<script src="https://ads.tracker.com`) {
+		t.Errorf("blocked script element should be removed, got:\n%s", bodyStr)
+	}
+
+	// Non-blocked script should be preserved
+	if !strings.Contains(bodyStr, "app.js") {
+		t.Errorf("non-blocked script should be preserved, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestScriptStrippingProtocolRelative(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head>` +
+			`<script src="//ads.tracker.com/ad.js"></script>` +
+			`</head><body><p>Content</p></body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Protocol-relative src should be resolved and blocked
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
+		t.Errorf("protocol-relative blocked script should be stripped, got:\n%s", bodyStr)
+	}
+	// The <script> element itself should be gone
+	if strings.Contains(bodyStr, `<script src="//ads.tracker.com`) {
+		t.Errorf("blocked script element should be removed, got:\n%s", bodyStr)
+	}
+}
+
+func TestScriptStrippingInlinePreserved(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head>` +
+			`<script>var x = 1;</script>` +
+			`</head><body><p>Content</p></body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Inline scripts (no src) should not be stripped
+	if !strings.Contains(bodyStr, "var x = 1") {
+		t.Errorf("inline script should be preserved, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, "ublproxy") {
+		t.Errorf("no replacement comment should appear for inline scripts, got:\n%s", bodyStr)
+	}
+}
+
+func TestScriptStrippingWithElementHiding(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+	rs.AddLine("##.ad-banner")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head>` +
+			`<script src="https://ads.tracker.com/ad.js"></script>` +
+			`</head><body>` +
+			`<div class="ad-banner">Ad</div>` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Script should be stripped via URL blocking
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
+		t.Errorf("blocked script should be stripped, got:\n%s", bodyStr)
+	}
+
+	// Element hiding should also work
+	if !strings.Contains(bodyStr, "<!-- ublproxy: replaced .ad-banner -->") {
+		t.Errorf("element hiding should still work, got:\n%s", bodyStr)
+	}
+
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestScriptStrippingHTTPS(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head>` +
+			`<script src="https://ads.tracker.com/serve.js"></script>` +
+			`<script src="/local/app.js"></script>` +
+			`</head><body><p>Content</p></body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpsURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Blocked script should be stripped
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
+		t.Errorf("blocked script should be stripped over HTTPS, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, `<script src="https://ads.tracker.com`) {
+		t.Errorf("blocked script element should be removed, got:\n%s", bodyStr)
+	}
+
+	// Non-blocked script should be preserved
+	if !strings.Contains(bodyStr, "app.js") {
+		t.Errorf("non-blocked script should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestScriptStrippingNoElementHidingRules(t *testing.T) {
+	// Only URL rules, no element hiding rules for any domain.
+	// Script stripping should still work.
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head>` +
+			`<script src="https://ads.tracker.com/ad.js"></script>` +
+			`</head><body><p>Content</p></body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
+		t.Errorf("script stripping should work without element hiding rules, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestScriptStrippingURLPattern(t *testing.T) {
+	// Test that URL pattern rules (not just hostname rules) also strip scripts
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||example.com/ads/*")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head>` +
+			`<script src="https://example.com/ads/tracker.js"></script>` +
+			`<script src="https://example.com/lib/jquery.js"></script>` +
+			`</head><body><p>Content</p></body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Path-matching rule should block the ads script
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
+		t.Errorf("URL pattern should strip matching script, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, `<script src="https://example.com/ads/`) {
+		t.Errorf("blocked script element should be removed, got:\n%s", bodyStr)
+	}
+
+	// Non-matching path should be preserved
+	if !strings.Contains(bodyStr, "jquery.js") {
+		t.Errorf("non-matching script should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+// --- Iframe stripping tests ---
+
+func TestIframeStrippingBlockedHost(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<iframe src="https://ads.tracker.com/ad-frame"></iframe>` +
+			`<iframe src="https://safe.example.com/embed"></iframe>` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Blocked iframe should be stripped
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked iframe") {
+		t.Errorf("blocked iframe should have replacement comment, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, `<iframe src="https://ads.tracker.com`) {
+		t.Errorf("blocked iframe element should be removed, got:\n%s", bodyStr)
+	}
+
+	// Non-blocked iframe should be preserved
+	if !strings.Contains(bodyStr, "safe.example.com/embed") {
+		t.Errorf("non-blocked iframe should be preserved, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestIframeStrippingProtocolRelative(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<iframe src="//ads.tracker.com/embed"></iframe>` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked iframe") {
+		t.Errorf("protocol-relative blocked iframe should be stripped, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, `<iframe src="//ads.tracker.com`) {
+		t.Errorf("blocked iframe element should be removed, got:\n%s", bodyStr)
+	}
+}
+
+func TestIframeStrippingWithScriptStripping(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head>` +
+			`<script src="https://ads.tracker.com/ad.js"></script>` +
+			`</head><body>` +
+			`<iframe src="https://ads.tracker.com/frame"></iframe>` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Both should be stripped
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
+		t.Errorf("blocked script should be stripped, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked iframe") {
+		t.Errorf("blocked iframe should be stripped, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestIframeStrippingHTTPS(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<iframe src="https://ads.tracker.com/ad-frame"></iframe>` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpsURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked iframe") {
+		t.Errorf("blocked iframe should be stripped over HTTPS, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, `<iframe src="https://ads.tracker.com`) {
+		t.Errorf("blocked iframe element should be removed, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+// --- Object and embed stripping tests ---
+
+func TestObjectStrippingBlockedHost(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<object data="https://ads.tracker.com/ad.swf" type="application/x-shockwave-flash"></object>` +
+			`<object data="https://safe.example.com/video.swf" type="application/x-shockwave-flash"></object>` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Blocked object should be stripped
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked object") {
+		t.Errorf("blocked object should have replacement comment, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, `<object data="https://ads.tracker.com`) {
+		t.Errorf("blocked object element should be removed, got:\n%s", bodyStr)
+	}
+
+	// Non-blocked object should be preserved
+	if !strings.Contains(bodyStr, "safe.example.com/video.swf") {
+		t.Errorf("non-blocked object should be preserved, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestObjectStrippingNestedContent(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<object data="https://ads.tracker.com/ad.swf">` +
+			`<param name="movie" value="ad.swf">` +
+			`<p>Fallback content</p>` +
+			`</object>` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Nested content inside blocked object should also be stripped
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked object") {
+		t.Errorf("blocked object should have replacement comment, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, "Fallback content") {
+		t.Errorf("nested content should be stripped with the object, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestEmbedStrippingBlockedHost(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<embed src="https://ads.tracker.com/ad.swf" type="application/x-shockwave-flash">` +
+			`<embed src="https://safe.example.com/video.swf" type="application/x-shockwave-flash">` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Blocked embed should be stripped
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked embed") {
+		t.Errorf("blocked embed should have replacement comment, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, `<embed src="https://ads.tracker.com`) {
+		t.Errorf("blocked embed element should be removed, got:\n%s", bodyStr)
+	}
+
+	// Non-blocked embed should be preserved
+	if !strings.Contains(bodyStr, "safe.example.com/video.swf") {
+		t.Errorf("non-blocked embed should be preserved, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestEmbedStrippingIsVoidElement(t *testing.T) {
+	// Embed is a void element — no closing tag. Verify the tokenizer
+	// handles it correctly without trying to skipUntilClose.
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body>` +
+			`<embed src="https://ads.tracker.com/ad.swf">` +
+			`<p>After embed</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked embed") {
+		t.Errorf("blocked embed should be stripped, got:\n%s", bodyStr)
+	}
+	// Content after the void embed must be preserved
+	if !strings.Contains(bodyStr, "After embed") {
+		t.Errorf("content after void embed should be preserved, got:\n%s", bodyStr)
+	}
+}
+
+func TestAllBlockableElementsTogether(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head>` +
+			`<script src="https://ads.tracker.com/ad.js"></script>` +
+			`</head><body>` +
+			`<iframe src="https://ads.tracker.com/frame"></iframe>` +
+			`<object data="https://ads.tracker.com/ad.swf"><param name="x" value="y"></object>` +
+			`<embed src="https://ads.tracker.com/ad.swf">` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
+		t.Errorf("blocked script should be stripped, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked iframe") {
+		t.Errorf("blocked iframe should be stripped, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked object") {
+		t.Errorf("blocked object should be stripped, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked embed") {
+		t.Errorf("blocked embed should be stripped, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
+	}
+}
+
 // --- WebSocket test helpers ---
 
 // wsEchoHandler is a minimal WebSocket echo server using only stdlib.

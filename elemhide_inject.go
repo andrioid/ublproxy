@@ -22,9 +22,44 @@ var voidElements = map[string]bool{
 	"track": true, "wbr": true,
 }
 
+// srcBlockableTags maps element names to the attribute that carries their
+// external resource URL. If the resolved URL is blocked, the element is stripped.
+var srcBlockableTags = map[string]string{
+	"script": "src",
+	"iframe": "src",
+	"object": "data",
+	"embed":  "src",
+}
+
+// srcBlockContext carries the page context needed to resolve relative src
+// attributes and check them against URL blocking rules.
+type srcBlockContext struct {
+	scheme string
+	host   string
+	rules  *blocklist.RuleSet
+}
+
+// resolveSrc resolves an element's src attribute to an absolute URL.
+// Protocol-relative (//host/path), absolute (/path), and fully qualified
+// URLs are all handled.
+func (sc srcBlockContext) resolveSrc(src string) string {
+	if strings.HasPrefix(src, "//") {
+		return sc.scheme + ":" + src
+	}
+	if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
+		return src
+	}
+	if strings.HasPrefix(src, "/") {
+		return sc.scheme + "://" + sc.host + src
+	}
+	return sc.scheme + "://" + sc.host + "/" + src
+}
+
 // applyElementHiding checks if the response is HTML and applies element hiding
-// if applicable. Matched elements are replaced with placeholder divs; complex
-// selectors that can't be matched on a single element fall back to CSS injection.
+// and src-based stripping if applicable. Matched elements are replaced with
+// placeholder divs; complex selectors that can't be matched on a single element
+// fall back to CSS injection. Elements that load external resources (script,
+// iframe, object, embed) whose URL resolves to a blocked address are stripped.
 // Returns the modified body and true, or nil and false if unmodified.
 // Handles gzip and brotli compressed responses transparently.
 func (p *proxyHandler) applyElementHiding(resp *http.Response, host string) ([]byte, bool) {
@@ -38,7 +73,11 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host string) ([]b
 	}
 
 	eh := p.rules.ElementHidingForDomain(host)
-	if eh == nil {
+
+	// Nothing to do if there are no element hiding rules and no URL rules
+	// that could match resource URLs on blockable elements.
+	hasURLRules := p.rules.HostCount() > 0 || p.rules.RuleCount() > 0
+	if eh == nil && !hasURLRules {
 		return nil, false
 	}
 
@@ -65,9 +104,15 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host string) ([]b
 		return nil, false
 	}
 
-	modified := replaceElements(body, eh.Matchers)
+	var matchers []blocklist.SelectorMatch
+	if eh != nil {
+		matchers = eh.Matchers
+	}
 
-	if eh.FallbackCSS != "" {
+	sc := srcBlockContext{scheme: "https", host: host, rules: p.rules}
+	modified := replaceElements(body, matchers, sc)
+
+	if eh != nil && eh.FallbackCSS != "" {
 		styleTag := []byte("<style>" + eh.FallbackCSS + "</style>")
 		modified = injectStyleTag(modified, styleTag)
 	}
@@ -81,8 +126,10 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host string) ([]b
 
 // replaceElements uses the html tokenizer to walk through the HTML and replace
 // elements matching any of the simple selectors with placeholder divs.
-func replaceElements(src []byte, matchers []blocklist.SelectorMatch) []byte {
-	if len(matchers) == 0 {
+// It also strips elements (script, iframe, object, embed) whose resource URL
+// resolves to a blocked address.
+func replaceElements(src []byte, matchers []blocklist.SelectorMatch, sc srcBlockContext) []byte {
+	if len(matchers) == 0 && sc.rules == nil {
 		return src
 	}
 
@@ -107,6 +154,36 @@ func replaceElements(src []byte, matchers []blocklist.SelectorMatch) []byte {
 			tn, hasAttr := tokenizer.TagName()
 			tagName := string(tn)
 			tagNameLower := strings.ToLower(tagName)
+
+			// For elements with a blockable resource URL (script, iframe,
+			// object, embed), check if the URL resolves to a blocked
+			// address before falling through to element hiding.
+			if urlAttr, blockable := srcBlockableTags[tagNameLower]; blockable && hasAttr && sc.rules != nil {
+				attrs := collectAttrs(tokenizer, hasAttr)
+				if urlVal, ok := attrs[urlAttr]; ok && urlVal != "" {
+					resolved := sc.resolveSrc(urlVal)
+					ctx := blocklist.MatchContext{PageDomain: sc.host}
+					if sc.rules.ShouldBlockRequest(resolved, ctx) {
+						replacement := fmt.Sprintf("<!-- ublproxy: blocked %s %s -->", tagNameLower, urlVal)
+						buf.WriteString(replacement)
+						if !voidElements[tagNameLower] {
+							skipUntilClose(tokenizer, tagNameLower)
+						}
+						continue
+					}
+				}
+				// Not blocked — check element hiding with pre-collected attrs
+				if matched, selector := matchesAnyWithAttrs(tagNameLower, attrs, matchers); matched {
+					replacement := fmt.Sprintf("<div><!-- ublproxy: replaced %s --></div>", selector)
+					buf.WriteString(replacement)
+					if !voidElements[tagNameLower] {
+						skipUntilClose(tokenizer, tagNameLower)
+					}
+					continue
+				}
+				buf.Write(tokenizer.Raw())
+				continue
+			}
 
 			if matched, selector := matchesAny(tagNameLower, tokenizer, hasAttr, matchers); matched {
 				replacement := fmt.Sprintf("<div><!-- ublproxy: replaced %s --></div>", selector)
@@ -140,21 +217,43 @@ func replaceElements(src []byte, matchers []blocklist.SelectorMatch) []byte {
 }
 
 // matchesAny checks if the current element matches any of the simple selectors.
+// Collects attributes lazily from the tokenizer on first need.
 // Returns true and the matched selector string, or false.
 func matchesAny(tagName string, tokenizer *html.Tokenizer, hasAttr bool, matchers []blocklist.SelectorMatch) (bool, string) {
-	// Collect attributes lazily — only if we need them
 	var attrs map[string]string
 
 	for i := range matchers {
 		sm := &matchers[i]
 
-		// Quick tag-name check before collecting attributes
 		if sm.Tag != "" && sm.Tag != tagName {
 			continue
 		}
 
 		if attrs == nil {
 			attrs = collectAttrs(tokenizer, hasAttr)
+		}
+
+		attrFn := func(name string) string {
+			return attrs[name]
+		}
+
+		if sm.MatchesAttrs(tagName, attrFn) {
+			return true, sm.Selector
+		}
+	}
+
+	return false, ""
+}
+
+// matchesAnyWithAttrs checks if the element matches any selector using
+// a pre-collected attribute map. Used when attributes were already read
+// from the tokenizer (e.g. for script src checking).
+func matchesAnyWithAttrs(tagName string, attrs map[string]string, matchers []blocklist.SelectorMatch) (bool, string) {
+	for i := range matchers {
+		sm := &matchers[i]
+
+		if sm.Tag != "" && sm.Tag != tagName {
+			continue
 		}
 
 		attrFn := func(name string) string {
