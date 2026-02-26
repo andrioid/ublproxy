@@ -259,7 +259,7 @@ func (p *proxyHandler) loadBlocklistURL(rs *blocklist.RuleSet, url string) error
 
 // downloadBlocklist fetches a blocklist URL and returns its raw content.
 func downloadBlocklist(url string) ([]byte, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", url, err)
