@@ -112,8 +112,8 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host string) ([]b
 	sc := srcBlockContext{scheme: "https", host: host, rules: p.rules}
 	modified := replaceElements(body, matchers, sc)
 
-	if eh != nil && eh.FallbackCSS != "" {
-		styleTag := []byte("<style>" + eh.FallbackCSS + "</style>")
+	if eh != nil && eh.CSS != "" {
+		styleTag := []byte("<style>" + eh.CSS + "</style>")
 		modified = injectStyleTag(modified, styleTag)
 	}
 

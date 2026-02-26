@@ -143,7 +143,7 @@ func (rs *RuleSet) ElementHidingForDomain(domain string) *ElementHiding {
 
 func (rs *RuleSet) computeElementHiding(domain string) *ElementHiding {
 	var matchers []SelectorMatch
-	var complexSelectors []string
+	var allSelectors []string
 
 	for _, rule := range rs.elemHideRules {
 		if rule.Exception || !rule.appliesTo(domain) {
@@ -153,24 +153,21 @@ func (rs *RuleSet) computeElementHiding(domain string) *ElementHiding {
 			continue
 		}
 
+		allSelectors = append(allSelectors, rule.Selector)
+
 		if sm := ClassifySelector(rule.Selector); sm != nil {
 			matchers = append(matchers, *sm)
-		} else {
-			complexSelectors = append(complexSelectors, rule.Selector)
 		}
 	}
 
-	if len(matchers) == 0 && len(complexSelectors) == 0 {
+	if len(allSelectors) == 0 {
 		return nil
 	}
 
-	var fallbackCSS string
-	if len(complexSelectors) > 0 {
-		fallbackCSS = strings.Join(complexSelectors, ",\n") + " {\n  display: none !important;\n}\n"
-	}
+	css := strings.Join(allSelectors, ",\n") + " {\n  display: none !important;\n}\n"
 
 	return &ElementHiding{
-		Matchers:    matchers,
-		FallbackCSS: fallbackCSS,
+		Matchers: matchers,
+		CSS:      css,
 	}
 }

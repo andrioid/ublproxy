@@ -8,7 +8,7 @@ import (
 )
 
 // selectorPresent returns true if the selector appears in either the matchers
-// or the fallback CSS.
+// or the CSS.
 func selectorPresent(eh *blocklist.ElementHiding, sel string) bool {
 	if eh == nil {
 		return false
@@ -18,7 +18,7 @@ func selectorPresent(eh *blocklist.ElementHiding, sel string) bool {
 			return true
 		}
 	}
-	return strings.Contains(eh.FallbackCSS, sel)
+	return strings.Contains(eh.CSS, sel)
 }
 
 func TestElementHidingForDomain(t *testing.T) {
@@ -88,8 +88,11 @@ func TestElementHidingSimpleSelectors(t *testing.T) {
 	if eh.Matchers[0].Selector != ".ad-banner" {
 		t.Errorf("matcher selector = %q, want %q", eh.Matchers[0].Selector, ".ad-banner")
 	}
-	if eh.FallbackCSS != "" {
-		t.Errorf("expected no fallback CSS for simple selector, got:\n%s", eh.FallbackCSS)
+	if !strings.Contains(eh.CSS, ".ad-banner") {
+		t.Errorf("simple selector should also appear in CSS, got:\n%s", eh.CSS)
+	}
+	if !strings.Contains(eh.CSS, "display: none !important") {
+		t.Errorf("CSS should use 'display: none !important', got:\n%s", eh.CSS)
 	}
 }
 
@@ -106,11 +109,11 @@ func TestElementHidingComplexFallback(t *testing.T) {
 	if len(eh.Matchers) != 0 {
 		t.Errorf("expected 0 matchers for complex selector, got %d", len(eh.Matchers))
 	}
-	if !strings.Contains(eh.FallbackCSS, "div .ad-child") {
-		t.Errorf("complex selector should be in fallback CSS, got:\n%s", eh.FallbackCSS)
+	if !strings.Contains(eh.CSS, "div .ad-child") {
+		t.Errorf("complex selector should be in CSS, got:\n%s", eh.CSS)
 	}
-	if !strings.Contains(eh.FallbackCSS, "display: none !important") {
-		t.Errorf("fallback CSS should use 'display: none !important', got:\n%s", eh.FallbackCSS)
+	if !strings.Contains(eh.CSS, "display: none !important") {
+		t.Errorf("CSS should use 'display: none !important', got:\n%s", eh.CSS)
 	}
 }
 

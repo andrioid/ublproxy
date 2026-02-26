@@ -30,17 +30,18 @@ type SelectorMatch struct {
 	Attrs    []AttrMatch // attribute conditions beyond id/class
 }
 
-// ElementHiding holds the selectors applicable to a domain, split into
-// simple selectors (for element replacement) and a CSS fallback string
-// for complex selectors that can't be matched on a single element.
+// ElementHiding holds the selectors applicable to a domain. All selectors
+// produce CSS (display: none !important) to hide elements immediately and
+// block JS-injected ads. Simple selectors also produce Matchers for
+// element replacement, physically stripping matched content from the HTML.
 type ElementHiding struct {
-	Matchers    []SelectorMatch // simple selectors for element replacement
-	FallbackCSS string          // CSS for complex selectors (may be empty)
+	Matchers []SelectorMatch // simple selectors for element replacement
+	CSS      string          // display:none CSS for all selectors (may be empty)
 }
 
 // Empty returns true if there are no selectors to apply.
 func (eh *ElementHiding) Empty() bool {
-	return len(eh.Matchers) == 0 && eh.FallbackCSS == ""
+	return len(eh.Matchers) == 0 && eh.CSS == ""
 }
 
 // MatchesAttrs returns true if the element's attributes satisfy all the
