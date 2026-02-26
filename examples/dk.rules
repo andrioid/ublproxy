@@ -6,8 +6,7 @@
 ! Scripts with src matching these hostnames are also stripped from HTML
 ! responses, providing defense-in-depth alongside network-level blocking.
 
-||functions.adnami.io^
-||macro.adnami.io^
+||adnami.io^
 ||gum.criteo.com^
 ||ssp-sync.criteo.com^
 ||ads.pubmatic.com^
@@ -31,6 +30,7 @@ bt.dk##.adsm-wallpaper
 bt.dk##.adsm-contentBackground
 bt.dk##.adsm-wallpaper-l
 bt.dk##.adsm-wallpaper-r
+bt.dk##[class^="Page_stickyLeftAd__"]
 
 ! "Annonce" label above ads
 bt.dk##.no-annonce
