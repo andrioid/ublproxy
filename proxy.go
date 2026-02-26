@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"net/http"
 
 	"ublproxy/pkg/blocklist"
@@ -18,7 +19,11 @@ func newProxyHandler(certs *certCache, caCertPEM []byte, rules *blocklist.RuleSe
 		certs:     certs,
 		caCertPEM: caCertPEM,
 		rules:     rules,
-		transport: &http.Transport{},
+		// Force HTTP/1.1 upstream. Go's default HTTP/2 support causes hangs
+		// with certain Cloudflare hosts in a MITM proxy scenario.
+		transport: &http.Transport{
+			TLSNextProto: make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),
+		},
 	}
 }
 

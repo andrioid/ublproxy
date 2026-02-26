@@ -127,6 +127,37 @@ mise run test
 go test ./...
 ```
 
+### Browser testing
+
+For visual verification of proxy behavior in a real browser, use `playwright-cli` (installed via mise):
+
+```sh
+# Terminal 1: start the proxy
+mise run dev -- --blocklist examples/is.rules
+
+# Terminal 2: open a browser through the proxy
+mise run browser -- https://example.is
+
+# Terminal 2: open a browser without the proxy (for comparison)
+mise run browser-no-proxy -- https://example.is
+```
+
+The proxy session uses `playwright-cli-proxy.json` which configures the proxy address and ignores HTTPS certificate errors from the MITM CA.
+
+Interact with sessions using `playwright-cli -s=proxy <command>` or `playwright-cli -s=no-proxy <command>`:
+
+```sh
+# Take comparison screenshots
+playwright-cli -s=proxy screenshot --filename=tmp/with-proxy.png
+playwright-cli -s=no-proxy screenshot --filename=tmp/without-proxy.png
+
+# Check for element replacements in the DOM
+playwright-cli -s=proxy eval "document.documentElement.innerHTML.match(/<!-- ublproxy: replaced [^>]+ -->/g)"
+
+# Close sessions when done
+playwright-cli close-all
+```
+
 For verbose output:
 
 ```sh

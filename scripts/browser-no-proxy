@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Open a browser without the proxy (for comparison)"
+set -euo pipefail
+
+playwright-cli -s=no-proxy open "$@"
