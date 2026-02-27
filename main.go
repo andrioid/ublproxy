@@ -144,6 +144,7 @@ func run(_ context.Context, cmd *cli.Command) error {
 	httpAddr := fmt.Sprintf("%s:%d", addr, httpPort)
 	setupH := &setupHandler{
 		proxy:        handler,
+		caCert:       caCert,
 		caCertPEM:    caCertPEM,
 		portalOrigin: portalOrigin,
 		httpOrigin:   httpOrigin,

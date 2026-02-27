@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/x509"
 	_ "embed"
+	"encoding/json"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -61,6 +63,7 @@ func serveStaticFile(w http.ResponseWriter, path string) bool {
 // The API is not served here — it requires TLS on the HTTPS port.
 type setupHandler struct {
 	proxy        *proxyHandler
+	caCert       *x509.Certificate
 	caCertPEM    []byte
 	portalOrigin string
 	httpOrigin   string
@@ -84,6 +87,11 @@ func (s *setupHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Write(s.caCertPEM)
 		return
 	}
+	if r.URL.Path == "/ublproxy.mobileconfig" {
+		pacURL := s.httpOrigin + "/mobile.pac"
+		serveMobileconfig(w, s.caCert, pacURL)
+		return
+	}
 	if r.URL.Path == "/proxy.pac" {
 		s.handlePAC(w, r)
 		return
@@ -94,6 +102,9 @@ func (s *setupHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/qr.png" {
 		s.handleQR(w, r)
+		return
+	}
+	if serveStaticFile(w, r.URL.Path) {
 		return
 	}
 	if r.URL.Path == "/" || r.URL.Path == "/setup" {
@@ -120,6 +131,32 @@ func (s *setupHandler) handlePAC(w http.ResponseWriter, r *http.Request) {
 type setupData struct {
 	PortalURL  string
 	HttpOrigin string
+}
+
+// handleSetupVerify responds to /api/setup/verify on the HTTPS portal.
+// If the fetch() from the setup wizard succeeds, the CA cert is trusted
+// (the TLS handshake with the proxy's self-signed portal cert worked).
+// The setup wizard on :8080 calls this cross-origin to check setup status.
+func handleSetupVerify(w http.ResponseWriter, r *http.Request, httpOrigin string) {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		origin = httpOrigin
+	}
+	w.Header().Set("Access-Control-Allow-Origin", origin)
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Vary", "Origin")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]bool{
+		"ca_trusted": true,
+	})
 }
 
 var pacTmpl = template.Must(template.New("pac").Parse(`function FindProxyForURL(url, host) {
@@ -172,6 +209,10 @@ func (s *setupHandler) handleQR(w http.ResponseWriter, r *http.Request) {
 func (p *proxyHandler) handlePortal(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/ca.crt" {
 		p.handlePortalCACert(w, r)
+		return
+	}
+	if r.URL.Path == "/ublproxy.mobileconfig" {
+		p.handleMobileconfig(w, r)
 		return
 	}
 	if r.URL.Path == "/proxy.pac" {
@@ -251,6 +292,11 @@ func (p *proxyHandler) handleSetup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	setupTmpl.Execute(w, setupData{PortalURL: p.portalOrigin, HttpOrigin: p.httpOrigin})
+}
+
+func (p *proxyHandler) handleMobileconfig(w http.ResponseWriter, r *http.Request) {
+	pacURL := p.httpOrigin + "/mobile.pac"
+	serveMobileconfig(w, p.certs.caCert, pacURL)
 }
 
 func (p *proxyHandler) handlePortalCACert(w http.ResponseWriter, r *http.Request) {

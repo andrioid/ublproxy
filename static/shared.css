@@ -514,6 +514,241 @@ kbd {
   margin-top: 1rem;
 }
 
+/* Setup wizard */
+.wizard-progress {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-bottom: 2rem;
+}
+
+.wizard-step-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-border);
+  transition: background 0.2s, transform 0.2s;
+}
+
+.wizard-step-dot.active {
+  background: var(--color-primary);
+  transform: scale(1.3);
+}
+
+.wizard-step-dot.completed {
+  background: var(--color-success-text);
+}
+
+.wizard-step-connector {
+  width: 2rem;
+  height: 2px;
+  background: var(--color-border);
+  transition: background 0.2s;
+}
+
+.wizard-step-connector.completed {
+  background: var(--color-success-text);
+}
+
+.wizard-card {
+  display: none;
+}
+
+.wizard-card.active {
+  display: block;
+}
+
+.wizard-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border-light);
+}
+
+.wizard-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.verify-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-weight: 500;
+  margin-top: 1rem;
+}
+
+.verify-status.pending {
+  background: var(--color-info-bg);
+  color: var(--color-info-text);
+  border: 1px solid var(--color-info-border);
+}
+
+.verify-status.success {
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+  border: 1px solid var(--color-success-border);
+}
+
+.verify-status.error {
+  background: var(--color-error-bg);
+  color: var(--color-error-text);
+  border: 1px solid var(--color-error-border);
+}
+
+.verify-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.platform-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+.platform-btn {
+  padding: 0.4rem 0.85rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+
+.platform-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.platform-btn.active {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+
+.platform-instructions {
+  display: none;
+}
+
+.platform-instructions.active {
+  display: block;
+}
+
+.setup-download {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 1.2rem;
+  border-radius: 6px;
+  font-weight: 500;
+  font-size: 0.95rem;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+
+.setup-download-primary {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.setup-download-primary:hover {
+  background: var(--color-primary-hover);
+}
+
+.setup-download-secondary {
+  background: var(--color-bg);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+
+.setup-download-secondary:hover {
+  background: var(--color-border);
+}
+
+.setup-or {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 1.25rem 0;
+  color: var(--color-text-faint);
+  font-size: 0.85rem;
+}
+
+.setup-or::before,
+.setup-or::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--color-border-light);
+}
+
+.code-block {
+  display: block;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.9rem;
+  font-family: var(--font-mono);
+  background: var(--color-code-bg);
+  border-radius: var(--radius-sm);
+  word-break: break-all;
+  margin: 0.5rem 0;
+}
+
+.setup-qr {
+  text-align: center;
+  margin: 1.25rem 0;
+}
+
+.setup-qr img {
+  width: 160px;
+  height: 160px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.setup-qr p {
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.done-card {
+  text-align: center;
+  padding: 2rem 1.25rem;
+}
+
+.done-card h2 {
+  font-size: 1.3rem;
+  margin-bottom: 0.5rem;
+}
+
+.done-links {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  margin-top: 1.25rem;
+  flex-wrap: wrap;
+}
+
 /* Responsive */
 @media (max-width: 600px) {
   .nav { padding: 0 0.75rem; }

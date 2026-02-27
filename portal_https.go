@@ -48,6 +48,10 @@ func (h *portalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.proxy.handleSetup(w, r)
 		return
 	}
+	if r.URL.Path == "/ublproxy.mobileconfig" {
+		h.proxy.handleMobileconfig(w, r)
+		return
+	}
 	if r.URL.Path == "/" {
 		h.proxy.handlePortalIndex(w, r)
 		return
@@ -65,6 +69,10 @@ func (h *portalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if serveStaticFile(w, r.URL.Path) {
+		return
+	}
+	if r.URL.Path == "/api/setup/verify" {
+		handleSetupVerify(w, r, h.proxy.httpOrigin)
 		return
 	}
 	if len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" {

@@ -4,261 +4,470 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ublproxy Setup</title>
+<link rel="stylesheet" href="/static/shared.css">
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    line-height: 1.6;
-    color: #1a1a1a;
-    background: #f5f5f5;
-    padding: 2rem 1rem;
-  }
-  .container {
+  .setup-main {
     max-width: 640px;
     margin: 0 auto;
-    background: #fff;
-    border-radius: 8px;
-    padding: 2rem;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    padding: 2rem 1rem;
   }
-  h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
-  p.subtitle { color: #666; margin-bottom: 1.5rem; }
-  h2 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
-  ol { padding-left: 1.5rem; margin-bottom: 1rem; }
-  li { margin-bottom: 0.3rem; }
-  code {
-    background: #f0f0f0;
-    padding: 0.15rem 0.4rem;
-    border-radius: 3px;
-    font-size: 0.9em;
-  }
-  .card {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 8px;
-    padding: 1.5rem;
-    margin-bottom: 1.5rem;
-  }
-  .card h2 { margin-top: 0; }
-  .download {
-    display: inline-block;
-    background: #2563eb;
-    color: #fff;
-    text-decoration: none;
-    padding: 0.6rem 1.2rem;
-    border-radius: 6px;
-    font-weight: 500;
-  }
-  .download:hover { background: #1d4ed8; }
-  .portal-link {
-    display: inline-block;
-    margin-top: 1.5rem;
-    padding: 0.6rem 1.2rem;
-    background: #f0fdf4;
-    border: 1px solid #bbf7d0;
-    border-radius: 6px;
-    color: #166534;
-    text-decoration: none;
-    font-weight: 500;
-  }
-  .portal-link:hover { background: #dcfce7; }
-  .qr-wrapper {
+  .setup-header {
     text-align: center;
-    margin: 1rem 0;
+    margin-bottom: 0.5rem;
   }
-  .qr-wrapper img {
-    width: 180px;
-    height: 180px;
-    border: 1px solid #e2e8f0;
-    border-radius: 8px;
+  .setup-header h1 {
+    font-size: 1.4rem;
+    font-weight: 700;
   }
-  .note {
-    font-size: 0.85rem;
-    color: #666;
-    margin-top: 0.5rem;
+  .setup-header p {
+    color: var(--color-text-muted);
+    font-size: 0.9rem;
+    margin-top: 0.25rem;
   }
-  details {
-    border-top: 1px solid #eee;
-    padding-top: 1rem;
-    margin-top: 1rem;
-  }
-  details:first-of-type {
-    border-top: none;
-    padding-top: 0;
-    margin-top: 0.5rem;
-  }
-  summary {
-    font-size: 1.1rem;
-    font-weight: 600;
-    cursor: pointer;
-    padding: 0.25rem 0;
-  }
-  summary:hover { color: #2563eb; }
-  details[open] summary { margin-bottom: 0.5rem; }
 </style>
 </head>
 <body>
-<div class="container">
-  <h1>ublproxy Setup</h1>
-  <p class="subtitle">Install the CA certificate to enable HTTPS interception.</p>
 
-  <div class="card">
-    <h2>1. Download the CA Certificate</h2>
-    <p style="margin-bottom: 1rem">Your browser and OS must trust the ublproxy CA certificate before the proxy can intercept HTTPS traffic. Without it, every HTTPS request through the proxy will fail with a certificate error.</p>
-    <a class="download" href="/ca.crt">Download CA Certificate</a>
-
-    <div class="qr-wrapper">
-      <p style="margin-bottom: 0.5rem; font-size: 0.9rem; color: #666">Scan to open this page on your phone:</p>
-      <img src="/qr.png" alt="QR code to open setup page">
-    </div>
+<main class="setup-main">
+  <div class="setup-header">
+    <h1>ublproxy Setup</h1>
+    <p>Get your device connected in a few steps.</p>
   </div>
 
-  <div class="card">
-    <h2>2. Install and Trust the Certificate</h2>
-    <p style="margin-bottom: 0.5rem">Follow the instructions for your platform:</p>
+  <!-- Progress dots -->
+  <div class="wizard-progress" id="wizard-progress"></div>
 
-    <details>
-      <summary>macOS</summary>
-      <ol>
-        <li>Download <a href="/ca.crt">ca.crt</a> and open it &mdash; Keychain Access will launch</li>
-        <li>Add the certificate to the <strong>System</strong> keychain</li>
-        <li>Find <strong>ublproxy CA</strong> in the list, double-click it</li>
-        <li>Expand <strong>Trust</strong> and set <em>When using this certificate</em> to <strong>Always Trust</strong></li>
-        <li><strong>Restart your browser</strong> for the change to take effect</li>
+  <!-- Step 1: Install Certificate -->
+  <div class="card wizard-card" id="step-cert">
+    <h2 class="card-title" style="margin-bottom:0.75rem">Install Certificate</h2>
+    <p style="margin-bottom:1rem; font-size:0.9rem; color:var(--color-text-muted)">
+      Your device must trust the ublproxy CA certificate before the proxy can
+      filter HTTPS traffic. Without it, every HTTPS request through the proxy
+      will fail with a certificate error.
+    </p>
+
+    <!-- Platform selector -->
+    <div class="platform-selector" id="platform-selector">
+      <button class="platform-btn" data-platform="apple">iOS / macOS</button>
+      <button class="platform-btn" data-platform="android">Android</button>
+      <button class="platform-btn" data-platform="windows">Windows</button>
+      <button class="platform-btn" data-platform="linux">Linux</button>
+      <button class="platform-btn" data-platform="firefox">Firefox</button>
+    </div>
+
+    <!-- Apple: .mobileconfig -->
+    <div class="platform-instructions" data-platform="apple">
+      <a class="setup-download setup-download-primary" href="/ublproxy.mobileconfig">
+        Download Profile (.mobileconfig)
+      </a>
+      <p style="margin-top:0.75rem; font-size:0.85rem; color:var(--color-text-muted)">
+        This profile installs the CA certificate <strong>and</strong> configures
+        proxy settings in one step.
+      </p>
+      <ol style="margin-top:0.75rem; padding-left:1.5rem; font-size:0.88rem">
+        <li>Download the profile above</li>
+        <li><strong>iOS:</strong> Go to Settings &rarr; General &rarr; VPN &amp; Device Management &rarr; tap the profile &rarr; Install</li>
+        <li><strong>iOS:</strong> Go to Settings &rarr; General &rarr; About &rarr; Certificate Trust Settings &rarr; enable full trust for <strong>ublproxy CA</strong></li>
+        <li><strong>macOS:</strong> Open the downloaded file &rarr; Keychain Access will prompt to install</li>
       </ol>
-    </details>
 
-    <details>
-      <summary>iOS / iPadOS</summary>
-      <ol>
-        <li>Open this page on your device (scan the QR code above)</li>
-        <li>Tap <a href="/ca.crt">Download CA Certificate</a> &mdash; a prompt appears to download the profile</li>
-        <li>Go to <strong>Settings &rarr; General &rarr; VPN &amp; Device Management</strong></li>
-        <li>Tap the downloaded <strong>ublproxy CA</strong> profile and tap <strong>Install</strong></li>
-        <li>Go to <strong>Settings &rarr; General &rarr; About &rarr; Certificate Trust Settings</strong></li>
-        <li>Enable full trust for <strong>ublproxy CA</strong></li>
+      <div class="setup-or">or install manually</div>
+
+      <a class="setup-download setup-download-secondary" href="/ca.crt">
+        Download CA Certificate (.crt)
+      </a>
+      <ol style="margin-top:0.75rem; padding-left:1.5rem; font-size:0.88rem">
+        <li><strong>macOS:</strong> Open the .crt file &rarr; add to System keychain &rarr; find <strong>ublproxy CA</strong> &rarr; set Trust to <strong>Always Trust</strong></li>
+        <li><strong>iOS:</strong> Download .crt &rarr; Settings &rarr; General &rarr; VPN &amp; Device Management &rarr; install &rarr; then enable full trust under Certificate Trust Settings</li>
+        <li>Restart your browser after installing</li>
       </ol>
-    </details>
+    </div>
 
-    <details>
-      <summary>Android</summary>
-      <ol>
-        <li>Open this page on your device (scan the QR code above)</li>
-        <li>Tap <a href="/ca.crt">Download CA Certificate</a></li>
+    <!-- Android -->
+    <div class="platform-instructions" data-platform="android">
+      <a class="setup-download setup-download-primary" href="/ca.crt">
+        Download CA Certificate
+      </a>
+      <ol style="margin-top:0.75rem; padding-left:1.5rem; font-size:0.88rem">
+        <li>Download the certificate above</li>
         <li>Go to <strong>Settings &rarr; Security &rarr; Encryption &amp; Credentials &rarr; Install a certificate &rarr; CA certificate</strong></li>
         <li>Select the downloaded <strong>ublproxy-ca.crt</strong> file and confirm</li>
       </ol>
-      <p class="note">Menu paths vary by manufacturer (Samsung, Pixel, etc.).</p>
-    </details>
+      <p style="margin-top:0.5rem; font-size:0.82rem; color:var(--color-text-muted)">
+        Menu paths vary by manufacturer (Samsung, Pixel, etc.).
+      </p>
+    </div>
 
-    <details>
-      <summary>Linux</summary>
-      <ol>
-        <li>Copy the certificate: <code>sudo cp ublproxy-ca.crt /usr/local/share/ca-certificates/</code></li>
-        <li>Update the trust store: <code>sudo update-ca-certificates</code></li>
-        <li><strong>Restart your browser</strong> for the change to take effect</li>
-      </ol>
-    </details>
-
-    <details>
-      <summary>Windows</summary>
-      <ol>
-        <li>Download <a href="/ca.crt">ca.crt</a> and double-click it</li>
+    <!-- Windows -->
+    <div class="platform-instructions" data-platform="windows">
+      <a class="setup-download setup-download-primary" href="/ca.crt">
+        Download CA Certificate
+      </a>
+      <ol style="margin-top:0.75rem; padding-left:1.5rem; font-size:0.88rem">
+        <li>Download and double-click the certificate</li>
         <li>Click <strong>Install Certificate</strong></li>
         <li>Select <strong>Local Machine</strong>, then <strong>Place all certificates in the following store</strong></li>
         <li>Choose <strong>Trusted Root Certification Authorities</strong> and finish the wizard</li>
-        <li><strong>Restart your browser</strong> for the change to take effect</li>
+        <li>Restart your browser</li>
       </ol>
-    </details>
+    </div>
 
-    <details>
-      <summary>Firefox</summary>
-      <ol>
-        <li>Open <strong>Settings &rarr; Privacy &amp; Security &rarr; Certificates &rarr; View Certificates</strong></li>
-        <li>Click <strong>Import</strong> and select the downloaded <a href="/ca.crt">ca.crt</a></li>
-        <li>Check <strong>Trust this CA to identify websites</strong> and confirm</li>
-        <li><strong>Restart Firefox</strong> for the change to take effect</li>
+    <!-- Linux -->
+    <div class="platform-instructions" data-platform="linux">
+      <a class="setup-download setup-download-primary" href="/ca.crt">
+        Download CA Certificate
+      </a>
+      <ol style="margin-top:0.75rem; padding-left:1.5rem; font-size:0.88rem">
+        <li>Copy the certificate:<br><code class="code-block">sudo cp ublproxy-ca.crt /usr/local/share/ca-certificates/</code></li>
+        <li>Update the trust store:<br><code class="code-block">sudo update-ca-certificates</code></li>
+        <li>Restart your browser</li>
       </ol>
-    </details>
+    </div>
+
+    <!-- Firefox -->
+    <div class="platform-instructions" data-platform="firefox">
+      <p style="margin-bottom:0.75rem; font-size:0.88rem; color:var(--color-text-muted)">
+        Firefox uses its own certificate store, separate from your OS.
+        You may need to install the certificate here in addition to your OS trust store.
+      </p>
+      <a class="setup-download setup-download-primary" href="/ca.crt">
+        Download CA Certificate
+      </a>
+      <ol style="margin-top:0.75rem; padding-left:1.5rem; font-size:0.88rem">
+        <li>Open <strong>Settings &rarr; Privacy &amp; Security &rarr; Certificates &rarr; View Certificates</strong></li>
+        <li>Click <strong>Import</strong> and select the downloaded .crt file</li>
+        <li>Check <strong>Trust this CA to identify websites</strong> and confirm</li>
+        <li>Restart Firefox</li>
+      </ol>
+    </div>
+
+    <!-- QR code for mobile -->
+    <div class="setup-qr" id="setup-qr">
+      <p>Scan to open this page on your phone:</p>
+      <img src="/qr.png" alt="QR code to open setup page">
+    </div>
+
+    <div class="wizard-nav">
+      <div></div>
+      <div class="wizard-actions">
+        <button class="btn btn-primary" onclick="wizardNext()">Next</button>
+      </div>
+    </div>
   </div>
 
-  <div class="card">
-    <h2>3. Configure Your Browser Proxy</h2>
-    <p style="margin-bottom: 0.75rem">Use the automatic proxy configuration file (PAC) to route traffic through ublproxy.</p>
+  <!-- Step 2: Configure Proxy -->
+  <div class="card wizard-card" id="step-proxy">
+    <h2 class="card-title" style="margin-bottom:0.75rem">Configure Proxy</h2>
 
-    <h2>Desktop</h2>
-    <p style="margin-bottom: 0.5rem">PAC URL:</p>
-    <code style="display:block; padding:0.6rem 0.8rem; font-size:1rem; word-break:break-all" id="pac-url"></code>
+    <div id="proxy-apple-skip" style="display:none">
+      <div class="verify-status success">
+        Proxy settings were included in the configuration profile.
+        You can skip this step if you installed the .mobileconfig profile.
+      </div>
+      <div class="setup-or">or configure manually</div>
+    </div>
 
-    <details>
-      <summary>Firefox</summary>
-      <ol>
-        <li>Open <strong>Settings &rarr; General &rarr; Network Settings &rarr; Settings&hellip;</strong></li>
-        <li>Select <strong>Automatic proxy configuration URL</strong></li>
-        <li>Enter the PAC URL shown above</li>
-        <li>Click <strong>OK</strong></li>
-      </ol>
-    </details>
-
-    <details>
-      <summary>macOS (system-wide)</summary>
-      <ol>
-        <li>Open <strong>System Settings &rarr; Network &rarr; Wi-Fi &rarr; Details &rarr; Proxies</strong></li>
-        <li>Enable <strong>Automatic Proxy Configuration</strong></li>
-        <li>Enter the PAC URL shown above</li>
-      </ol>
-    </details>
-
-    <details>
-      <summary>Chromium / Chrome</summary>
-      <p>Chromium-based browsers use the system proxy settings. Configure the PAC URL at the OS level, or launch with:</p>
-      <code style="display:block; padding:0.6rem 0.8rem; margin-top:0.5rem; word-break:break-all" id="chrome-flag"></code>
-    </details>
-
-    <h2 style="margin-top: 1.5rem">Mobile</h2>
-    <p style="margin-bottom: 0.5rem">Mobile devices (iOS/Android) use a separate PAC URL because they don't support HTTPS proxy connections:</p>
-    <code style="display:block; padding:0.6rem 0.8rem; font-size:1rem; word-break:break-all" id="mobile-pac-url"></code>
-
-    <details>
-      <summary>iOS / iPadOS</summary>
-      <ol>
-        <li>Go to <strong>Settings &rarr; Wi-Fi</strong></li>
-        <li>Tap the info button (<strong>i</strong>) on your connected network</li>
-        <li>Scroll to <strong>Configure Proxy</strong> and select <strong>Automatic</strong></li>
-        <li>Enter the mobile PAC URL shown above</li>
-      </ol>
-    </details>
-
-    <details>
-      <summary>Android</summary>
-      <ol>
-        <li>Go to <strong>Settings &rarr; Wi-Fi</strong></li>
-        <li>Tap the gear icon on your connected network</li>
-        <li>Expand <strong>Advanced options</strong> and set <strong>Proxy</strong> to <strong>Proxy Auto-Config</strong></li>
-        <li>Enter the mobile PAC URL shown above</li>
-      </ol>
-      <p class="note">Some manufacturers label this setting differently. Look for proxy settings within your Wi-Fi network configuration.</p>
-    </details>
-
-    <p style="margin-top: 1rem; font-size: 0.85rem; color: #666">
-      The desktop PAC file routes traffic through the encrypted HTTPS proxy.
-      The mobile PAC file routes traffic through a plain HTTP proxy on the same
-      machine &mdash; this is required because iOS and Android do not support HTTPS
-      proxy connections. The proxy still intercepts and filters HTTPS traffic
-      normally via MITM.
+    <p style="margin-bottom:0.75rem; font-size:0.9rem; color:var(--color-text-muted)">
+      Use the automatic proxy configuration file (PAC) to route traffic through ublproxy.
     </p>
 
-    <script>
-      var pacURL = '{{.PortalURL}}' + '/proxy.pac';
-      document.getElementById('pac-url').textContent = pacURL;
-      document.getElementById('chrome-flag').textContent =
-        'chromium --proxy-pac-url=' + pacURL;
-      var mobilePacURL = '{{.HttpOrigin}}' + '/mobile.pac';
-      document.getElementById('mobile-pac-url').textContent = mobilePacURL;
-    </script>
+    <!-- Desktop PAC -->
+    <div id="proxy-desktop-section">
+      <h3 style="font-size:0.95rem; font-weight:600; margin-bottom:0.4rem">Desktop</h3>
+      <p style="font-size:0.85rem; color:var(--color-text-muted); margin-bottom:0.4rem">PAC URL:</p>
+      <code class="code-block" id="pac-url"></code>
+
+      <!-- Platform-specific proxy instructions -->
+      <div class="platform-instructions" data-platform="apple" data-proxy>
+        <ol style="margin-top:0.75rem; padding-left:1.5rem; font-size:0.88rem">
+          <li>Open <strong>System Settings &rarr; Network &rarr; Wi-Fi &rarr; Details &rarr; Proxies</strong></li>
+          <li>Enable <strong>Automatic Proxy Configuration</strong></li>
+          <li>Enter the PAC URL shown above</li>
+        </ol>
+      </div>
+
+      <div class="platform-instructions" data-platform="windows" data-proxy>
+        <ol style="margin-top:0.75rem; padding-left:1.5rem; font-size:0.88rem">
+          <li>Open <strong>Settings &rarr; Network &amp; Internet &rarr; Proxy</strong></li>
+          <li>Under <strong>Automatic proxy setup</strong>, enable <strong>Use setup script</strong></li>
+          <li>Enter the PAC URL shown above</li>
+        </ol>
+      </div>
+
+      <div class="platform-instructions" data-platform="linux" data-proxy>
+        <ol style="margin-top:0.75rem; padding-left:1.5rem; font-size:0.88rem">
+          <li>Configure your browser's proxy settings to use the PAC URL above</li>
+          <li>Or launch Chromium with:<br><code class="code-block" id="chrome-flag"></code></li>
+        </ol>
+      </div>
+
+      <div class="platform-instructions" data-platform="firefox" data-proxy>
+        <ol style="margin-top:0.75rem; padding-left:1.5rem; font-size:0.88rem">
+          <li>Open <strong>Settings &rarr; General &rarr; Network Settings &rarr; Settings&hellip;</strong></li>
+          <li>Select <strong>Automatic proxy configuration URL</strong></li>
+          <li>Enter the PAC URL shown above</li>
+          <li>Click <strong>OK</strong></li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- Mobile PAC -->
+    <div id="proxy-mobile-section" style="margin-top:1.25rem">
+      <h3 style="font-size:0.95rem; font-weight:600; margin-bottom:0.4rem">Mobile</h3>
+      <p style="font-size:0.85rem; color:var(--color-text-muted); margin-bottom:0.4rem">
+        Mobile devices use a separate PAC URL (plain HTTP proxy):
+      </p>
+      <code class="code-block" id="mobile-pac-url"></code>
+
+      <div class="platform-instructions" data-platform="apple" data-proxy-mobile>
+        <ol style="margin-top:0.75rem; padding-left:1.5rem; font-size:0.88rem">
+          <li>Go to <strong>Settings &rarr; Wi-Fi</strong></li>
+          <li>Tap the info button on your connected network</li>
+          <li>Scroll to <strong>Configure Proxy</strong> and select <strong>Automatic</strong></li>
+          <li>Enter the mobile PAC URL shown above</li>
+        </ol>
+      </div>
+
+      <div class="platform-instructions" data-platform="android" data-proxy-mobile>
+        <ol style="margin-top:0.75rem; padding-left:1.5rem; font-size:0.88rem">
+          <li>Go to <strong>Settings &rarr; Wi-Fi</strong></li>
+          <li>Tap the gear icon on your connected network</li>
+          <li>Set <strong>Proxy</strong> to <strong>Proxy Auto-Config</strong></li>
+          <li>Enter the mobile PAC URL shown above</li>
+        </ol>
+      </div>
+
+      <p style="margin-top:0.75rem; font-size:0.82rem; color:var(--color-text-faint)">
+        The desktop PAC routes traffic through the encrypted HTTPS proxy.
+        The mobile PAC uses a plain HTTP proxy because iOS and Android do not
+        support HTTPS proxy connections. HTTPS traffic is still filtered via MITM.
+      </p>
+    </div>
+
+    <div class="wizard-nav">
+      <button class="btn btn-secondary" onclick="wizardPrev()">Back</button>
+      <div class="wizard-actions">
+        <button class="btn btn-primary" onclick="wizardNext()">Next</button>
+      </div>
+    </div>
   </div>
 
-  <a class="portal-link" href="{{.PortalURL}}">Open Management Portal &rarr;</a>
-</div>
+  <!-- Step 3: Verify -->
+  <div class="card wizard-card" id="step-verify">
+    <h2 class="card-title" style="margin-bottom:0.75rem">Verify Setup</h2>
+    <p style="margin-bottom:1rem; font-size:0.9rem; color:var(--color-text-muted)">
+      Check that the CA certificate is installed and trusted by your browser.
+    </p>
+
+    <div class="verify-status pending" id="verify-status">
+      <span class="verify-spinner"></span>
+      <span id="verify-text">Checking certificate trust&hellip;</span>
+    </div>
+
+    <div id="verify-detail" style="margin-top:0.75rem; font-size:0.85rem; color:var(--color-text-muted); display:none"></div>
+
+    <div class="wizard-nav">
+      <button class="btn btn-secondary" onclick="wizardPrev()">Back</button>
+      <div class="wizard-actions">
+        <button class="btn btn-secondary" onclick="runVerify()">Check Again</button>
+        <button class="btn btn-primary" onclick="wizardNext()">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 4: Done -->
+  <div class="card wizard-card done-card" id="step-done">
+    <h2>Setup Complete</h2>
+    <p style="color:var(--color-text-muted); margin-top:0.25rem">
+      Your device is ready to use ublproxy for ad-free browsing.
+    </p>
+    <p style="margin-top:1rem; font-size:0.88rem; color:var(--color-text-muted)">
+      Register a passkey on the management portal to create custom blocking
+      rules and manage your blocklist subscriptions.
+    </p>
+    <div class="done-links">
+      <a class="btn btn-primary" id="portal-link" href="">Open Management Portal</a>
+      <button class="btn btn-secondary" onclick="wizardGoTo(0)">Start Over</button>
+    </div>
+  </div>
+</main>
+
+<script>
+(function() {
+  var portalURL = '{{.PortalURL}}';
+  var httpOrigin = '{{.HttpOrigin}}';
+
+  var steps = ['step-cert', 'step-proxy', 'step-verify', 'step-done'];
+  var currentStep = 0;
+
+  // Populate dynamic values
+  var pacURL = portalURL + '/proxy.pac';
+  var mobilePacURL = httpOrigin + '/mobile.pac';
+  document.getElementById('pac-url').textContent = pacURL;
+  document.getElementById('mobile-pac-url').textContent = mobilePacURL;
+  document.getElementById('portal-link').href = portalURL;
+  var chromeFlag = document.getElementById('chrome-flag');
+  if (chromeFlag) chromeFlag.textContent = 'chromium --proxy-pac-url=' + pacURL;
+
+  // Platform detection
+  var ua = navigator.userAgent;
+  var detectedPlatform = 'apple';
+  if (/Firefox/i.test(ua)) detectedPlatform = 'firefox';
+  else if (/Android/i.test(ua)) detectedPlatform = 'android';
+  else if (/Windows/i.test(ua)) detectedPlatform = 'windows';
+  else if (/Linux/i.test(ua) && !/Android/i.test(ua)) detectedPlatform = 'linux';
+  // apple covers iPhone, iPad, Macintosh
+
+  var activePlatform = detectedPlatform;
+
+  function selectPlatform(platform) {
+    activePlatform = platform;
+    // Update platform buttons
+    var btns = document.querySelectorAll('.platform-btn');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].classList.toggle('active', btns[i].getAttribute('data-platform') === platform);
+    }
+    // Show platform-specific instructions (cert step)
+    var instructions = document.querySelectorAll('.platform-instructions:not([data-proxy]):not([data-proxy-mobile])');
+    for (var i = 0; i < instructions.length; i++) {
+      instructions[i].classList.toggle('active', instructions[i].getAttribute('data-platform') === platform);
+    }
+    // Show platform-specific proxy instructions (proxy step)
+    var proxyInstructions = document.querySelectorAll('.platform-instructions[data-proxy]');
+    for (var i = 0; i < proxyInstructions.length; i++) {
+      proxyInstructions[i].classList.toggle('active', proxyInstructions[i].getAttribute('data-platform') === platform);
+    }
+    var proxyMobileInstructions = document.querySelectorAll('.platform-instructions[data-proxy-mobile]');
+    for (var i = 0; i < proxyMobileInstructions.length; i++) {
+      var p = proxyMobileInstructions[i].getAttribute('data-platform');
+      proxyMobileInstructions[i].classList.toggle('active', p === platform);
+    }
+
+    // Show/hide QR code (useful for mobile platforms)
+    var qr = document.getElementById('setup-qr');
+    var isMobile = platform === 'apple' || platform === 'android';
+    qr.style.display = isMobile ? '' : 'none';
+
+    // Show apple skip message on proxy step
+    var appleSkip = document.getElementById('proxy-apple-skip');
+    appleSkip.style.display = platform === 'apple' ? '' : 'none';
+
+    // Show/hide mobile proxy section
+    var mobileSection = document.getElementById('proxy-mobile-section');
+    mobileSection.style.display = isMobile ? '' : 'none';
+
+    // Show/hide desktop proxy section based on platform
+    var desktopSection = document.getElementById('proxy-desktop-section');
+    desktopSection.style.display = (platform !== 'android') ? '' : 'none';
+
+    sessionStorage.setItem('ublproxy_platform', platform);
+  }
+
+  // Bind platform buttons
+  var btns = document.querySelectorAll('.platform-btn');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].addEventListener('click', function() {
+      selectPlatform(this.getAttribute('data-platform'));
+    });
+  }
+
+  // Restore or detect platform
+  var savedPlatform = sessionStorage.getItem('ublproxy_platform');
+  selectPlatform(savedPlatform || detectedPlatform);
+
+  // Wizard navigation
+  function renderProgress() {
+    var container = document.getElementById('wizard-progress');
+    container.innerHTML = '';
+    for (var i = 0; i < steps.length; i++) {
+      if (i > 0) {
+        var conn = document.createElement('div');
+        conn.className = 'wizard-step-connector';
+        if (i <= currentStep) conn.classList.add('completed');
+        container.appendChild(conn);
+      }
+      var dot = document.createElement('div');
+      dot.className = 'wizard-step-dot';
+      if (i === currentStep) dot.classList.add('active');
+      else if (i < currentStep) dot.classList.add('completed');
+      container.appendChild(dot);
+    }
+  }
+
+  function showStep(index) {
+    currentStep = index;
+    for (var i = 0; i < steps.length; i++) {
+      var el = document.getElementById(steps[i]);
+      el.classList.toggle('active', i === index);
+    }
+    renderProgress();
+    sessionStorage.setItem('ublproxy_step', index);
+
+    if (steps[index] === 'step-verify') {
+      runVerify();
+    }
+  }
+
+  window.wizardNext = function() {
+    if (currentStep < steps.length - 1) showStep(currentStep + 1);
+  };
+
+  window.wizardPrev = function() {
+    if (currentStep > 0) showStep(currentStep - 1);
+  };
+
+  window.wizardGoTo = function(index) {
+    showStep(index);
+  };
+
+  // Verification
+  window.runVerify = function() {
+    var status = document.getElementById('verify-status');
+    var text = document.getElementById('verify-text');
+    var detail = document.getElementById('verify-detail');
+
+    status.className = 'verify-status pending';
+    text.textContent = 'Checking certificate trust\u2026';
+    detail.style.display = 'none';
+    // Re-add spinner
+    var existingSpinner = status.querySelector('.verify-spinner');
+    if (!existingSpinner) {
+      var spinner = document.createElement('span');
+      spinner.className = 'verify-spinner';
+      status.insertBefore(spinner, status.firstChild);
+    }
+
+    fetch(portalURL + '/api/setup/verify', { mode: 'cors' })
+      .then(function(resp) { return resp.json(); })
+      .then(function(data) {
+        var spinner = status.querySelector('.verify-spinner');
+        if (spinner) spinner.remove();
+
+        status.className = 'verify-status success';
+        text.textContent = 'CA certificate is trusted. Your browser can connect to the proxy.';
+      })
+      .catch(function(err) {
+        var spinner = status.querySelector('.verify-spinner');
+        if (spinner) spinner.remove();
+
+        status.className = 'verify-status error';
+        text.textContent = 'Could not verify certificate trust.';
+        detail.style.display = '';
+        detail.innerHTML =
+          'The browser could not connect to <code>' + portalURL + '</code>. ' +
+          'This usually means the CA certificate is not yet installed or trusted. ' +
+          'Go back to step 1 and follow the instructions for your platform, then try again.';
+      });
+  };
+
+  // Restore step from session
+  var savedStep = parseInt(sessionStorage.getItem('ublproxy_step'), 10);
+  if (savedStep >= 0 && savedStep < steps.length) {
+    showStep(savedStep);
+  } else {
+    showStep(0);
+  }
+})();
+</script>
 </body>
 </html>
