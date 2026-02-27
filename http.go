@@ -67,9 +67,12 @@ func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// Replace ad elements in HTML responses (skip HEAD — no body to modify)
+	// Replace ad elements in HTML responses (skip HEAD — no body to modify).
+	// If the proxy connection is plain HTTP (r.TLS == nil), skip the
+	// bootstrap script injection to avoid leaking the session token.
+	insecure := r.TLS == nil
 	if r.Method != http.MethodHead {
-		if modified, ok := p.applyElementHiding(resp, r.URL.Hostname(), clientIPFromRequest(r)); ok {
+		if modified, ok := p.applyElementHiding(resp, r.URL.Hostname(), clientIPFromRequest(r), insecure); ok {
 			copyHeaders(w.Header(), resp.Header)
 			removeHopByHopHeaders(w.Header())
 			w.Header().Del("Content-Length")

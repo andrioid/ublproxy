@@ -24,6 +24,7 @@ type proxyHandler struct {
 	sessions  *sessionMap
 
 	portalOrigin string
+	httpOrigin   string
 
 	// activityLog records recent proxy events for the activity feed.
 	activityLog *ActivityLog

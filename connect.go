@@ -70,9 +70,12 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Clear the deadline after successful handshake
 	clientConn.SetDeadline(time.Time{})
 
-	// Extract client IP for script injection (from the original CONNECT request)
+	// Extract client IP for script injection (from the original CONNECT request).
+	// If the outer connection is plain HTTP (r.TLS == nil), mark as insecure
+	// so the bootstrap script (which contains the session token) is not injected.
 	cIP, _, _ := net.SplitHostPort(r.RemoteAddr)
-	p.proxyTLSRequests(tlsClientConn, host, port, cIP)
+	insecure := r.TLS == nil
+	p.proxyTLSRequests(tlsClientConn, host, port, cIP, insecure)
 }
 
 // tunnelPassthrough establishes a transparent TCP tunnel between the client
@@ -109,7 +112,9 @@ func (p *proxyHandler) tunnelPassthrough(w http.ResponseWriter, r *http.Request,
 // proxyTLSRequests reads HTTP requests from the intercepted client TLS
 // connection and forwards them to the upstream server. Supports keep-alive
 // by looping until the client closes the connection or an error occurs.
-func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port, clientIP string) {
+// When insecure is true the outer proxy connection is plain HTTP, so the
+// bootstrap script (which embeds the session token) is not injected.
+func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port, clientIP string, insecure bool) {
 	clientReader := bufio.NewReader(clientTLS)
 
 	for {
@@ -183,7 +188,7 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port, clientI
 
 		// Replace ad elements in HTML responses (skip HEAD — no body to modify)
 		if req.Method != http.MethodHead {
-			if modified, ok := p.applyElementHiding(resp, host, clientIP); ok {
+			if modified, ok := p.applyElementHiding(resp, host, clientIP, insecure); ok {
 				resp.Body.Close()
 				resp.Body = io.NopCloser(bytes.NewReader(modified))
 				resp.ContentLength = int64(len(modified))

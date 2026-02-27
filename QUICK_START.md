@@ -64,7 +64,7 @@ volumes:
 
 The proxy listens on two ports:
 
-- **HTTP** (default `8080`) — Setup page and CA certificate download
+- **HTTP** (default `8080`) — Setup page, CA certificate download, and mobile proxy (plain HTTP CONNECT for iOS/Android)
 - **HTTPS** (default `8443`) — Proxy, management portal, and API
 
 ## Blocklists
@@ -97,7 +97,7 @@ Authenticated users can add their own subscriptions (EasyList, EasyPrivacy, etc.
 The proxy generates a CA certificate on first run. Your browser must trust this certificate for HTTPS filtering to work.
 
 1. Visit `http://<host>:<http-port>/` (e.g. `http://localhost:8080/`) to download the CA certificate
-2. Install and trust it on your platform — the setup page has detailed instructions for macOS, Linux, Windows, and Firefox
+2. Install and trust it on your platform — the setup page has detailed instructions for macOS, iOS, Android, Linux, Windows, and Firefox
 3. **Restart your browser** after trusting the certificate — browsers cache certificate trust state and won't pick up changes until restarted
 
 When running with Docker, the CA certificate persists in the mounted `/data` volume. Download it from the HTTP setup page or copy it directly from the volume (`ca.crt`).
@@ -107,6 +107,16 @@ When running with Docker, the CA certificate persists in the mounted `/data` vol
 The setup page at `http://<host>:<http-port>/` provides a PAC (Proxy Auto-Configuration) URL that routes all external traffic through the proxy. Configure it in your browser or OS network settings.
 
 Alternatively, set `https://<host>:<https-port>` as an HTTPS proxy manually.
+
+### Mobile devices (iOS / Android)
+
+Mobile devices cannot use the HTTPS proxy because iOS and Android don't support the `HTTPS` PAC proxy type. Use the mobile-specific PAC URL instead:
+
+1. Open `http://<host>:<http-port>/` on your phone (scan the QR code on the setup page)
+2. Download and install the CA certificate (see the setup page for platform-specific steps)
+3. Configure your Wi-Fi proxy to **Automatic** with the URL: `http://<host>:<http-port>/mobile.pac`
+
+The mobile PAC file routes traffic through the plain HTTP proxy on port 8080. Ad blocking and element hiding work identically to the desktop proxy. The element picker is not available on mobile connections.
 
 ## Custom rules
 
@@ -184,7 +194,7 @@ All flags can also be set via environment variables. Environment variables take 
 | Flag | Env var | Default | Description |
 |------|---------|---------|-------------|
 | `--addr` | `UBLPROXY_ADDR` | `0.0.0.0` | Address to listen on |
-| `--http-port` | `UBLPROXY_HTTP_PORT` | `8080` | HTTP port for setup page and CA certificate download |
+| `--http-port` | `UBLPROXY_HTTP_PORT` | `8080` | HTTP port for setup page, CA certificate download, and mobile proxy |
 | `--https-port` | `UBLPROXY_HTTPS_PORT` | `8443` | HTTPS port for proxy, portal, and API |
 | `--hostname` | `UBLPROXY_HOSTNAME` | `localhost` | Portal hostname for WebAuthn and TLS cert (must be a domain, not an IP) |
 | `--ca-dir` | `UBLPROXY_CA_DIR` | `~/.ublproxy` | Directory for CA certificate and key |

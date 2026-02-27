@@ -5,6 +5,8 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+
+	qrcode "github.com/skip2/go-qrcode"
 )
 
 //go:embed static/portal.html
@@ -53,14 +55,28 @@ func serveStaticFile(w http.ResponseWriter, path string) bool {
 	return true
 }
 
-// setupHandler serves the HTTP-only setup page and CA certificate.
-// No proxy, no API — those require TLS on the HTTPS port.
+// setupHandler serves the HTTP setup page, CA certificate, and mobile PAC
+// file. It also accepts proxy traffic (CONNECT tunnels and HTTP forwarding)
+// over plain HTTP for mobile devices that cannot use an HTTPS proxy.
+// The API is not served here — it requires TLS on the HTTPS port.
 type setupHandler struct {
+	proxy        *proxyHandler
 	caCertPEM    []byte
 	portalOrigin string
+	httpOrigin   string
 }
 
 func (s *setupHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Proxy: CONNECT tunnels (mobile devices send HTTPS requests via HTTP proxy)
+	if r.Method == http.MethodConnect {
+		s.proxy.handleConnect(w, r)
+		return
+	}
+	// Proxy: HTTP forward (absolute-URI requests through the proxy)
+	if r.URL.Host != "" {
+		s.proxy.handleHTTP(w, r)
+		return
+	}
 	if r.URL.Path == "/ca.crt" {
 		w.Header().Set("Content-Type", "application/x-pem-file")
 		w.Header().Set("Content-Disposition", `attachment; filename="ublproxy-ca.crt"`)
@@ -72,10 +88,18 @@ func (s *setupHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handlePAC(w, r)
 		return
 	}
+	if r.URL.Path == "/mobile.pac" {
+		s.handleMobilePAC(w, r)
+		return
+	}
+	if r.URL.Path == "/qr.png" {
+		s.handleQR(w, r)
+		return
+	}
 	if r.URL.Path == "/" || r.URL.Path == "/setup" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		setupTmpl.Execute(w, struct{ PortalURL string }{s.portalOrigin})
+		setupTmpl.Execute(w, setupData{PortalURL: s.portalOrigin, HttpOrigin: s.httpOrigin})
 		return
 	}
 	http.NotFound(w, r)
@@ -93,6 +117,11 @@ func (s *setupHandler) handlePAC(w http.ResponseWriter, r *http.Request) {
 	pacTmpl.Execute(w, struct{ ProxyHost string }{parsed.Host})
 }
 
+type setupData struct {
+	PortalURL  string
+	HttpOrigin string
+}
+
 var pacTmpl = template.Must(template.New("pac").Parse(`function FindProxyForURL(url, host) {
   if (isPlainHostName(host) ||
       host === "localhost" || host === "127.0.0.1" || host === "::1") {
@@ -101,6 +130,39 @@ var pacTmpl = template.Must(template.New("pac").Parse(`function FindProxyForURL(
   return "HTTPS {{.ProxyHost}}";
 }
 `))
+
+// mobilePacTmpl returns PROXY (plain HTTP) instead of HTTPS. iOS and Android
+// do not support the HTTPS PAC proxy type, so mobile devices use this file.
+var mobilePacTmpl = template.Must(template.New("mobilepac").Parse(`function FindProxyForURL(url, host) {
+  if (isPlainHostName(host) ||
+      host === "localhost" || host === "127.0.0.1" || host === "::1") {
+    return "DIRECT";
+  }
+  return "PROXY {{.ProxyHost}}";
+}
+`))
+
+func (s *setupHandler) handleMobilePAC(w http.ResponseWriter, r *http.Request) {
+	parsed, err := url.Parse(s.httpOrigin)
+	if err != nil {
+		http.Error(w, "misconfigured http origin", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
+	mobilePacTmpl.Execute(w, struct{ ProxyHost string }{parsed.Host})
+}
+
+func (s *setupHandler) handleQR(w http.ResponseWriter, r *http.Request) {
+	png, err := qrcode.Encode(s.httpOrigin, qrcode.Medium, 256)
+	if err != nil {
+		http.Error(w, "failed to generate QR code", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.WriteHeader(http.StatusOK)
+	w.Write(png)
+}
 
 // handlePortal routes direct requests on the proxy listener (used by
 // proxyHandler.ServeHTTP when r.URL.Host is empty). In production the
@@ -114,6 +176,10 @@ func (p *proxyHandler) handlePortal(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/proxy.pac" {
 		p.handlePAC(w, r)
+		return
+	}
+	if r.URL.Path == "/mobile.pac" {
+		p.handleMobilePAC(w, r)
 		return
 	}
 	if r.URL.Path == "/" || r.URL.Path == "/setup" {
@@ -131,6 +197,16 @@ func (p *proxyHandler) handlePAC(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
 	pacTmpl.Execute(w, struct{ ProxyHost string }{parsed.Host})
+}
+
+func (p *proxyHandler) handleMobilePAC(w http.ResponseWriter, r *http.Request) {
+	parsed, err := url.Parse(p.httpOrigin)
+	if err != nil {
+		http.Error(w, "misconfigured http origin", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
+	mobilePacTmpl.Execute(w, struct{ ProxyHost string }{parsed.Host})
 }
 
 func serveHTML(w http.ResponseWriter, content string) {
@@ -158,7 +234,7 @@ func (p *proxyHandler) handlePortalActivity(w http.ResponseWriter, r *http.Reque
 func (p *proxyHandler) handleSetup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	setupTmpl.Execute(w, struct{ PortalURL string }{p.portalOrigin})
+	setupTmpl.Execute(w, setupData{PortalURL: p.portalOrigin, HttpOrigin: p.httpOrigin})
 }
 
 func (p *proxyHandler) handlePortalCACert(w http.ResponseWriter, r *http.Request) {

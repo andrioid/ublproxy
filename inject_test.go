@@ -83,7 +83,7 @@ func TestScriptInjectionInHTML(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader(htmlBody)),
 	}
 
-	modified, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1")
+	modified, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
 	if !ok {
 		t.Fatal("expected modification")
 	}
@@ -122,7 +122,7 @@ func TestNoScriptInjectionWithoutSession(t *testing.T) {
 	}
 
 	// No rules and no session -> no modification
-	_, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1")
+	_, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
 	if ok {
 		t.Error("should not modify HTML when there's no session and no rules")
 	}
@@ -143,7 +143,7 @@ func TestNoScriptInjectionForNonHTML(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader(`{"data": true}`)),
 	}
 
-	_, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1")
+	_, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
 	if ok {
 		t.Error("should not modify non-HTML responses")
 	}
@@ -173,7 +173,7 @@ func TestScriptInjectionWithGzip(t *testing.T) {
 		Body: io.NopCloser(&buf),
 	}
 
-	modified, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1")
+	modified, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
 	if !ok {
 		t.Fatal("expected modification for gzipped HTML")
 	}
@@ -204,7 +204,7 @@ func TestScriptInjectionWithRules(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader(htmlBody)),
 	}
 
-	modified, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1")
+	modified, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
 	if !ok {
 		t.Fatal("expected modification")
 	}

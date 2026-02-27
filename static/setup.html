@@ -63,6 +63,21 @@
     font-weight: 500;
   }
   .portal-link:hover { background: #dcfce7; }
+  .qr-wrapper {
+    text-align: center;
+    margin: 1rem 0;
+  }
+  .qr-wrapper img {
+    width: 180px;
+    height: 180px;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+  }
+  .note {
+    font-size: 0.85rem;
+    color: #666;
+    margin-top: 0.5rem;
+  }
 </style>
 </head>
 <body>
@@ -74,6 +89,11 @@
     <h2>1. Download the CA Certificate</h2>
     <p style="margin-bottom: 1rem">Your browser and OS must trust the ublproxy CA certificate before the proxy can intercept HTTPS traffic. Without it, every HTTPS request through the proxy will fail with a certificate error.</p>
     <a class="download" href="/ca.crt">Download CA Certificate</a>
+
+    <div class="qr-wrapper">
+      <p style="margin-bottom: 0.5rem; font-size: 0.9rem; color: #666">Scan to open this page on your phone:</p>
+      <img src="/qr.png" alt="QR code to open setup page">
+    </div>
   </div>
 
   <div class="card">
@@ -89,6 +109,29 @@
         <li>Expand <strong>Trust</strong> and set <em>When using this certificate</em> to <strong>Always Trust</strong></li>
         <li><strong>Restart your browser</strong> for the change to take effect</li>
       </ol>
+    </div>
+
+    <div class="section">
+      <h2>iOS / iPadOS</h2>
+      <ol>
+        <li>Open this page on your device (scan the QR code above)</li>
+        <li>Tap <a href="/ca.crt">Download CA Certificate</a> &mdash; a prompt appears to download the profile</li>
+        <li>Go to <strong>Settings &rarr; General &rarr; VPN &amp; Device Management</strong></li>
+        <li>Tap the downloaded <strong>ublproxy CA</strong> profile and tap <strong>Install</strong></li>
+        <li>Go to <strong>Settings &rarr; General &rarr; About &rarr; Certificate Trust Settings</strong></li>
+        <li>Enable full trust for <strong>ublproxy CA</strong></li>
+      </ol>
+    </div>
+
+    <div class="section">
+      <h2>Android</h2>
+      <ol>
+        <li>Open this page on your device (scan the QR code above)</li>
+        <li>Tap <a href="/ca.crt">Download CA Certificate</a></li>
+        <li>Go to <strong>Settings &rarr; Security &rarr; Encryption &amp; Credentials &rarr; Install a certificate &rarr; CA certificate</strong></li>
+        <li>Select the downloaded <strong>ublproxy-ca.crt</strong> file and confirm</li>
+      </ol>
+      <p class="note">Menu paths vary by manufacturer (Samsung, Pixel, etc.).</p>
     </div>
 
     <div class="section">
@@ -124,7 +167,10 @@
 
   <div class="card">
     <h2>3. Configure Your Browser Proxy</h2>
-    <p style="margin-bottom: 0.75rem">Use the automatic proxy configuration file (PAC) to route traffic through ublproxy:</p>
+    <p style="margin-bottom: 0.75rem">Use the automatic proxy configuration file (PAC) to route traffic through ublproxy.</p>
+
+    <h2>Desktop</h2>
+    <p style="margin-bottom: 0.5rem">PAC URL:</p>
     <code style="display:block; padding:0.6rem 0.8rem; font-size:1rem; word-break:break-all" id="pac-url"></code>
 
     <div class="section" style="border: none; padding-top: 0; margin-top: 1rem;">
@@ -152,17 +198,48 @@
       <code style="display:block; padding:0.6rem 0.8rem; margin-top:0.5rem; word-break:break-all" id="chrome-flag"></code>
     </div>
 
+    <div class="section">
+      <h2>Mobile</h2>
+      <p style="margin-bottom: 0.5rem">Mobile devices (iOS/Android) use a separate PAC URL because they don't support HTTPS proxy connections:</p>
+      <code style="display:block; padding:0.6rem 0.8rem; font-size:1rem; word-break:break-all" id="mobile-pac-url"></code>
+    </div>
+
+    <div class="section" style="border: none; padding-top: 0; margin-top: 1rem;">
+      <h2>iOS / iPadOS</h2>
+      <ol>
+        <li>Go to <strong>Settings &rarr; Wi-Fi</strong></li>
+        <li>Tap the info button (<strong>i</strong>) on your connected network</li>
+        <li>Scroll to <strong>Configure Proxy</strong> and select <strong>Automatic</strong></li>
+        <li>Enter the mobile PAC URL shown above</li>
+      </ol>
+    </div>
+
+    <div class="section">
+      <h2>Android</h2>
+      <ol>
+        <li>Go to <strong>Settings &rarr; Wi-Fi</strong></li>
+        <li>Tap the gear icon on your connected network</li>
+        <li>Expand <strong>Advanced options</strong> and set <strong>Proxy</strong> to <strong>Proxy Auto-Config</strong></li>
+        <li>Enter the mobile PAC URL shown above</li>
+      </ol>
+      <p class="note">Some manufacturers label this setting differently. Look for proxy settings within your Wi-Fi network configuration.</p>
+    </div>
+
     <p style="margin-top: 1rem; font-size: 0.85rem; color: #666">
-      The PAC file routes all external traffic through the ublproxy HTTPS proxy.
-      Local addresses (localhost, 127.0.0.1) bypass the proxy so this setup
-      page and the management portal remain directly accessible.
+      The desktop PAC file routes traffic through the encrypted HTTPS proxy.
+      The mobile PAC file routes traffic through a plain HTTP proxy on the same
+      machine &mdash; this is required because iOS and Android do not support HTTPS
+      proxy connections. The proxy still intercepts and filters HTTPS traffic
+      normally via MITM.
     </p>
 
     <script>
-      var pacURL = location.origin + '/proxy.pac';
+      var pacURL = '{{.PortalURL}}' + '/proxy.pac';
       document.getElementById('pac-url').textContent = pacURL;
       document.getElementById('chrome-flag').textContent =
         'chromium --proxy-pac-url=' + pacURL;
+      var mobilePacURL = '{{.HttpOrigin}}' + '/mobile.pac';
+      document.getElementById('mobile-pac-url').textContent = mobilePacURL;
     </script>
   </div>
 

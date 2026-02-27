@@ -36,6 +36,10 @@ func (h *portalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.proxy.handlePAC(w, r)
 		return
 	}
+	if r.URL.Path == "/mobile.pac" {
+		h.proxy.handleMobilePAC(w, r)
+		return
+	}
 	if r.URL.Path == "/setup" {
 		h.proxy.handleSetup(w, r)
 		return

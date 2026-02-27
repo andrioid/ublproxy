@@ -132,9 +132,24 @@ func run(_ context.Context, cmd *cli.Command) error {
 	portalH := &portalHandler{proxy: handler, api: api}
 	go startPortalHTTPS(httpsAddr, hostname, extraIPs, certs, portalH)
 
+	// For the HTTP origin, prefer the LAN IP over "localhost" since mobile
+	// devices need a routable address to reach the proxy.
+	httpHost := hostname
+	if httpHost == "localhost" && len(extraIPs) > 0 {
+		httpHost = extraIPs[0].String()
+	}
+	httpOrigin := fmt.Sprintf("http://%s:%d", httpHost, httpPort)
+	handler.httpOrigin = httpOrigin
+
 	httpAddr := fmt.Sprintf("%s:%d", addr, httpPort)
-	setupH := &setupHandler{caCertPEM: caCertPEM, portalOrigin: portalOrigin}
+	setupH := &setupHandler{
+		proxy:        handler,
+		caCertPEM:    caCertPEM,
+		portalOrigin: portalOrigin,
+		httpOrigin:   httpOrigin,
+	}
 	fmt.Fprintf(os.Stderr, "ublproxy setup page on http://%s\n", httpAddr)
+	fmt.Fprintf(os.Stderr, "ublproxy mobile proxy on %s\n", httpOrigin)
 	fmt.Fprintf(os.Stderr, "ublproxy proxy+portal on %s\n", portalOrigin)
 
 	if err := http.ListenAndServe(httpAddr, setupH); err != nil {

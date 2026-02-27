@@ -2347,3 +2347,156 @@ func TestBlockedHostStillBlockedWithExceptions(t *testing.T) {
 		t.Error("expected error for blocked HTTPS host, got nil")
 	}
 }
+
+func TestMobilePAC(t *testing.T) {
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), nil)
+
+	env.handler.httpOrigin = "http://192.168.1.100:8080"
+
+	resp, err := http.Get(env.proxyURL + "/mobile.pac")
+	if err != nil {
+		t.Fatalf("GET /mobile.pac: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType != "application/x-ns-proxy-autoconfig" {
+		t.Errorf("Content-Type = %q, want %q", contentType, "application/x-ns-proxy-autoconfig")
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "FindProxyForURL") {
+		t.Error("mobile PAC body does not contain FindProxyForURL function")
+	}
+	if !strings.Contains(bodyStr, "PROXY 192.168.1.100:8080") {
+		t.Errorf("mobile PAC body does not contain expected PROXY directive, got:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, "HTTPS") {
+		t.Error("mobile PAC body should not contain HTTPS directive")
+	}
+}
+
+func TestHTTPPortConnect(t *testing.T) {
+	var receivedPath string
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.Write([]byte("hello from upstream"))
+	}), nil)
+
+	// The test proxy server uses httptest.NewServer (plain HTTP), which is
+	// exactly the scenario we want: CONNECT over plain HTTP.
+	proxyURL, _ := url.Parse(env.proxyURL)
+
+	// Create an HTTP client that uses our plain-HTTP proxy for HTTPS requests
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+			TLSClientConfig: &tls.Config{
+				RootCAs: env.caPool,
+			},
+		},
+	}
+
+	resp, err := client.Get(env.httpsURL + "/test-path")
+	if err != nil {
+		t.Fatalf("GET through HTTP CONNECT: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if string(body) != "hello from upstream" {
+		t.Errorf("body = %q, want %q", body, "hello from upstream")
+	}
+	if receivedPath != "/test-path" {
+		t.Errorf("upstream received path = %q, want %q", receivedPath, "/test-path")
+	}
+}
+
+func TestHTTPPortForward(t *testing.T) {
+	var receivedPath string
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.Write([]byte("forwarded response"))
+	}), nil)
+
+	proxyURL, _ := url.Parse(env.proxyURL)
+
+	// Use the proxy for plain HTTP requests (absolute-URI forwarding)
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+		},
+	}
+
+	resp, err := client.Get(env.httpURL + "/forward-test")
+	if err != nil {
+		t.Fatalf("GET through HTTP forward: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if string(body) != "forwarded response" {
+		t.Errorf("body = %q, want %q", body, "forwarded response")
+	}
+	if receivedPath != "/forward-test" {
+		t.Errorf("upstream received path = %q, want %q", receivedPath, "/forward-test")
+	}
+}
+
+func TestNoBootstrapInjectionOnInsecureProxy(t *testing.T) {
+	sm := newSessionMap()
+	sm.Set("127.0.0.1", sessionEntry{Token: "secret-token", CredentialID: "cred-1"})
+
+	p := &proxyHandler{
+		sessions:     sm,
+		portalOrigin: "https://127.0.0.1:8443",
+	}
+
+	htmlBody := `<html><head><title>Test</title></head><body><p>Hello</p></body></html>`
+	resp := &http.Response{
+		StatusCode: 200,
+		Header:     http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
+		Body:       io.NopCloser(strings.NewReader(htmlBody)),
+	}
+
+	// With insecure=true (plain HTTP proxy), bootstrap script should NOT be injected
+	modified, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1", true)
+	if ok {
+		body := string(modified)
+		if strings.Contains(body, "secret-token") {
+			t.Error("session token must not be injected on insecure connections")
+		}
+		if strings.Contains(body, "<script>") {
+			t.Error("bootstrap script must not be injected on insecure connections")
+		}
+	}
+
+	// With insecure=false (HTTPS proxy), bootstrap script SHOULD be injected
+	resp2 := &http.Response{
+		StatusCode: 200,
+		Header:     http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
+		Body:       io.NopCloser(strings.NewReader(htmlBody)),
+	}
+	modified2, ok2 := p.applyElementHiding(resp2, "example.com", "127.0.0.1", false)
+	if !ok2 {
+		t.Fatal("expected modification on secure connection")
+	}
+	body2 := string(modified2)
+	if !strings.Contains(body2, "secret-token") {
+		t.Error("session token should be injected on secure connections")
+	}
+}

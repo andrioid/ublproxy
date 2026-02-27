@@ -20,7 +20,7 @@ Add your own blocking and element-hiding rules using adblock filter syntax, or u
 
 ### Encrypted, all the way
 
-The proxy listens on HTTPS. Traffic between browser and proxy is encrypted, and the proxy generates per-host TLS certificates on the fly using its own CA.
+Desktop browsers connect to the proxy over HTTPS. The proxy generates per-host TLS certificates on the fly using its own CA. Mobile devices (iOS/Android) connect over plain HTTP because they don't support HTTPS proxy connections — the MITM tunnel within the connection is still TLS-encrypted.
 
 ### Strips away scripts, images and embeds
 
@@ -46,6 +46,7 @@ It's important to be aware, that by using this solution, you're essentially decr
 - **No re-compression**: After decompressing gzip for CSS injection, HTML is served uncompressed to the client. This is fine when the proxy runs on localhost.
 - **Cert cache**: Generated TLS certificates are cached indefinitely with no eviction. Certificates have 24-hour validity but expired entries are never cleaned up. Fine for personal use.
 - **Session-to-IP mapping**: Sessions are bound to client IP. Multiple users behind the same NAT IP share a single session slot (last login wins).
+- **Mobile proxy connection is unencrypted**: iOS and Android don't support HTTPS proxy connections. Mobile devices use a plain HTTP CONNECT proxy on port 8080. The CONNECT metadata (target hostname) is visible on the LAN, though the tunneled content is TLS-encrypted. The element picker is disabled on mobile connections to avoid leaking the session token.
 
 ## References
 

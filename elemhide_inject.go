@@ -70,10 +70,11 @@ func (sc srcBlockContext) resolveSrc(src string) string {
 // elements are never removed from the DOM to avoid stripping legitimate page
 // content that happens to match generic selectors.
 // The bootstrap script for the element picker is injected when a session
-// exists for the client IP.
+// exists for the client IP, unless insecure is true (plain HTTP proxy
+// connection) — the token must not be sent over unencrypted connections.
 // Returns the modified body and true, or nil and false if unmodified.
 // Handles gzip and brotli compressed responses transparently.
-func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP string) ([]byte, bool) {
+func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP string, insecure bool) ([]byte, bool) {
 	contentType := resp.Header.Get("Content-Type")
 	if !strings.Contains(contentType, "text/html") {
 		return nil, false
@@ -95,8 +96,13 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 	hasURLRules := (baseline != nil && (baseline.HostCount() > 0 || baseline.RuleCount() > 0)) ||
 		(userRS != nil && (userRS.HostCount() > 0 || userRS.RuleCount() > 0))
 
-	// Generate bootstrap script tag (empty string if no session)
-	scriptTag := p.bootstrapScriptTag(clientIP, host)
+	// Generate bootstrap script tag (empty string if no session).
+	// Skip on insecure (plain HTTP) connections to avoid leaking the
+	// session token over unencrypted traffic.
+	var scriptTag string
+	if !insecure {
+		scriptTag = p.bootstrapScriptTag(clientIP, host)
+	}
 
 	// Nothing to do if there are no rules AND no script to inject
 	if baselineEH == nil && userEH == nil && !hasURLRules && scriptTag == "" {

@@ -48,7 +48,7 @@ mise run dev
 | Flag | Env var | Default | Description |
 |---|---|---|---|
 | `--addr` | `UBLPROXY_ADDR` | `0.0.0.0` | Address to listen on |
-| `--http-port` | `UBLPROXY_HTTP_PORT` | `8080` | HTTP port for setup page and CA certificate download |
+| `--http-port` | `UBLPROXY_HTTP_PORT` | `8080` | HTTP port for setup page, CA certificate download, and mobile proxy |
 | `--https-port` | `UBLPROXY_HTTPS_PORT` | `8443` | HTTPS port for proxy, portal, and API |
 | `--hostname` | `UBLPROXY_HOSTNAME` | `localhost` | Portal hostname for WebAuthn and TLS cert (must be a domain, not an IP) |
 | `--ca-dir` | `UBLPROXY_CA_DIR` | `~/.ublproxy/` | Directory for CA certificate and key |
@@ -72,6 +72,12 @@ curl --proxy https://127.0.0.1:8443 --proxy-cacert ~/.ublproxy/ca.crt --cacert ~
 
 # HTTPS (skip certificate verification — quick and dirty)
 curl --proxy https://127.0.0.1:8443 --proxy-insecure -k https://example.com
+
+# Mobile proxy (plain HTTP CONNECT — how iOS/Android connect)
+curl --proxy http://127.0.0.1:8080 --cacert ~/.ublproxy/ca.crt https://example.com
+
+# Fetch the mobile PAC file
+curl http://127.0.0.1:8080/mobile.pac
 ```
 
 ### Verifying request blocking
@@ -179,7 +185,7 @@ Proxy code lives in `package main` in the project root. The `pkg/` directory con
 | `proxy.go` | Proxy handler, baseline/per-user rule loading, request dispatch |
 | `http.go` | Plain HTTP request forwarding, hop-by-hop header stripping |
 | `connect.go` | CONNECT method handling, TLS MITM, request forwarding |
-| `portal.go` | Portal and setup page serving (embeds static HTML) |
+| `portal.go` | Portal, setup page, mobile PAC, and QR code serving (embeds static HTML) |
 | `portal_https.go` | HTTPS listener, TLS termination, request routing |
 | `api.go` | API handler, routing, CORS, and auth middleware |
 | `api_auth.go` | WebAuthn registration and login API endpoints |
@@ -204,7 +210,7 @@ Proxy code lives in `package main` in the project root. The `pkg/` directory con
 | `static/activity.html` | Activity feed (filtered, auto-refresh) |
 | `static/shared.css` | Shared design system (CSS custom properties, nav, cards) |
 | `static/shared.js` | Shared auth, WebAuthn, nav helpers |
-| `static/setup.html` | Setup page for CA certificate installation |
+| `static/setup.html` | Setup page for CA certificate installation (desktop, iOS, Android) |
 | `static/bootstrap.js` | Injected bootstrap script (keyboard shortcut, picker loader) |
 | `static/picker.js` | Element picker UI (Shadow DOM isolated) |
 | `scripts/build` | Build task |
