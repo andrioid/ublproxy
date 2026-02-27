@@ -37,10 +37,6 @@ type apiHandler struct {
 	// credential ID whose rules changed.
 	onRulesChanged func(credentialID string)
 
-	// defaultSubscriptions are auto-provisioned for each user on first
-	// login/register. Configured via --default-subscription CLI flags.
-	defaultSubscriptions []store.DefaultSubscription
-
 	// activityLog is the shared ring buffer for proxy event logging.
 	activityLog *ActivityLog
 
@@ -205,18 +201,6 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) error {
 
 func jsonDecode(data []byte, v any) error {
 	return json.Unmarshal(data, v)
-}
-
-// ensureDefaults provisions default subscriptions for a user. Called after
-// successful register or login. Errors are logged but not propagated — the
-// user can still use the system without defaults.
-func (a *apiHandler) ensureDefaults(credentialID string) {
-	if len(a.defaultSubscriptions) == 0 {
-		return
-	}
-	if err := a.store.EnsureDefaultSubscriptions(credentialID, a.defaultSubscriptions); err != nil {
-		logError("ensure-defaults", err)
-	}
 }
 
 // handlePickerJS serves the element picker JavaScript. This is loaded by the

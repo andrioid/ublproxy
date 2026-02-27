@@ -45,10 +45,8 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) migrate() error {
-	if _, err := s.db.Exec(schema); err != nil {
-		return err
-	}
-	return s.migrations()
+	_, err := s.db.Exec(schema)
+	return err
 }
 
 const schema = `
@@ -81,7 +79,6 @@ CREATE TABLE IF NOT EXISTS blocklist_subscriptions (
 	url           TEXT NOT NULL,
 	name          TEXT NOT NULL DEFAULT '',
 	enabled       INTEGER NOT NULL DEFAULT 1,
-	is_default    INTEGER NOT NULL DEFAULT 0,
 	created_at    TEXT NOT NULL DEFAULT (datetime('now')),
 	UNIQUE(credential_id, url)
 );
@@ -92,39 +89,3 @@ CREATE TABLE IF NOT EXISTS blocklist_cache (
 	fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 `
-
-// migrations runs ALTER TABLE statements for columns added after the
-// initial schema. Each uses IF NOT EXISTS-style guards (SQLite doesn't
-// support IF NOT EXISTS on ALTER TABLE, so we check pragma table_info).
-func (s *Store) migrations() error {
-	// Add is_default column to blocklist_subscriptions (added 2026-02-27)
-	if !s.columnExists("blocklist_subscriptions", "is_default") {
-		if _, err := s.db.Exec("ALTER TABLE blocklist_subscriptions ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0"); err != nil {
-			return fmt.Errorf("add is_default column: %w", err)
-		}
-	}
-	return nil
-}
-
-// columnExists checks whether a column exists on a table using pragma table_info.
-func (s *Store) columnExists(table, column string) bool {
-	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
-	if err != nil {
-		return false
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid int
-		var name, typ string
-		var notnull int
-		var dflt *string
-		var pk int
-		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
-			return false
-		}
-		if name == column {
-			return true
-		}
-	}
-	return false
-}

@@ -32,6 +32,7 @@ services:
       - ublproxy-data:/data
     environment:
       - UBLPROXY_HOSTNAME=localhost
+      - UBLPROXY_BLOCKLIST=https://easylist.to/easylist/easylist.txt,https://easylist.to/easylist/easyprivacy.txt
     restart: unless-stopped
 
 volumes:
@@ -66,7 +67,30 @@ The proxy listens on two ports:
 - **HTTP** (default `8080`) — Setup page and CA certificate download
 - **HTTPS** (default `8443`) — Proxy, management portal, and API
 
-EasyList and EasyPrivacy blocklists are enabled by default.
+## Blocklists
+
+The `--blocklist` flag loads adblock filter lists into the baseline, applying to all traffic (authenticated and unauthenticated). You can specify it multiple times:
+
+```bash
+./ublproxy \
+  --blocklist https://easylist.to/easylist/easylist.txt \
+  --blocklist https://easylist.to/easylist/easyprivacy.txt
+```
+
+With environment variables (comma-separated):
+
+```bash
+UBLPROXY_BLOCKLIST="https://easylist.to/easylist/easylist.txt,https://easylist.to/easylist/easyprivacy.txt" ./ublproxy
+```
+
+In docker-compose:
+
+```yaml
+environment:
+  - UBLPROXY_BLOCKLIST=https://easylist.to/easylist/easylist.txt,https://easylist.to/easylist/easyprivacy.txt
+```
+
+Authenticated users can add their own subscriptions (EasyList, EasyPrivacy, etc.) via the portal's Subscriptions page, which includes a "Popular Lists" section with one-click buttons.
 
 ## Install the CA certificate
 
@@ -165,5 +189,4 @@ All flags can also be set via environment variables. Environment variables take 
 | `--hostname` | `UBLPROXY_HOSTNAME` | `localhost` | Portal hostname for WebAuthn and TLS cert (must be a domain, not an IP) |
 | `--ca-dir` | `UBLPROXY_CA_DIR` | `~/.ublproxy` | Directory for CA certificate and key |
 | `--db` | `UBLPROXY_DB` | `~/.ublproxy/ublproxy.db` | Path to SQLite database |
-| `--blocklist` | `UBLPROXY_BLOCKLIST` | *(none)* | Path or URL to a blocklist file (repeatable) |
-| `--default-subscription` | `UBLPROXY_DEFAULT_SUBSCRIPTION` | EasyList + EasyPrivacy | Default blocklist subscription URL, auto-provisioned per user on login (repeatable) |
+| `--blocklist` | `UBLPROXY_BLOCKLIST` | *(none)* | Path or URL to a blocklist file (repeatable, comma-separated in env var) |

@@ -6,12 +6,6 @@ import (
 	"time"
 )
 
-// DefaultSubscription pairs a URL with a display name for auto-provisioning.
-type DefaultSubscription struct {
-	URL  string
-	Name string
-}
-
 // Subscription represents a user's blocklist URL subscription.
 type Subscription struct {
 	ID           int64
@@ -19,7 +13,6 @@ type Subscription struct {
 	URL          string
 	Name         string
 	Enabled      bool
-	IsDefault    bool
 	CreatedAt    time.Time
 }
 
@@ -44,26 +37,10 @@ func (s *Store) CreateSubscription(credentialID, url, name string) (*Subscriptio
 	}, nil
 }
 
-// EnsureDefaultSubscriptions creates subscription rows for each default
-// subscription URL if they don't already exist for this credential.
-// Idempotent — safe to call on every login.
-func (s *Store) EnsureDefaultSubscriptions(credentialID string, defaults []DefaultSubscription) error {
-	for _, d := range defaults {
-		_, err := s.db.Exec(
-			"INSERT OR IGNORE INTO blocklist_subscriptions (credential_id, url, name, is_default) VALUES (?, ?, ?, 1)",
-			credentialID, d.URL, d.Name,
-		)
-		if err != nil {
-			return fmt.Errorf("ensure default subscription %s: %w", d.URL, err)
-		}
-	}
-	return nil
-}
-
 // ListSubscriptions returns all subscriptions for a credential.
 func (s *Store) ListSubscriptions(credentialID string) ([]Subscription, error) {
 	rows, err := s.db.Query(
-		"SELECT id, credential_id, url, name, enabled, is_default, created_at FROM blocklist_subscriptions WHERE credential_id = ? ORDER BY is_default DESC, created_at ASC",
+		"SELECT id, credential_id, url, name, enabled, created_at FROM blocklist_subscriptions WHERE credential_id = ? ORDER BY created_at DESC",
 		credentialID,
 	)
 	if err != nil {
@@ -159,12 +136,11 @@ func scanSubscriptions(rows *sql.Rows) ([]Subscription, error) {
 	for rows.Next() {
 		var sub Subscription
 		var createdAt string
-		var enabled, isDefault int
-		if err := rows.Scan(&sub.ID, &sub.CredentialID, &sub.URL, &sub.Name, &enabled, &isDefault, &createdAt); err != nil {
+		var enabled int
+		if err := rows.Scan(&sub.ID, &sub.CredentialID, &sub.URL, &sub.Name, &enabled, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan subscription: %w", err)
 		}
 		sub.Enabled = enabled != 0
-		sub.IsDefault = isDefault != 0
 		var parseErr error
 		sub.CreatedAt, parseErr = time.Parse("2006-01-02 15:04:05", createdAt)
 		if parseErr != nil {

@@ -53,8 +53,7 @@ mise run dev
 | `--hostname` | `UBLPROXY_HOSTNAME` | `localhost` | Portal hostname for WebAuthn and TLS cert (must be a domain, not an IP) |
 | `--ca-dir` | `UBLPROXY_CA_DIR` | `~/.ublproxy/` | Directory for CA certificate and key |
 | `--db` | `UBLPROXY_DB` | `~/.ublproxy/ublproxy.db` | Path to SQLite database |
-| `--blocklist` | `UBLPROXY_BLOCKLIST` | *(none)* | Path or URL to a blocklist file (can be specified multiple times) |
-| `--default-subscription` | `UBLPROXY_DEFAULT_SUBSCRIPTION` | EasyList + EasyPrivacy | Default blocklist subscription URL, auto-provisioned for each user on login (can be specified multiple times) |
+| `--blocklist` | `UBLPROXY_BLOCKLIST` | *(none)* | Path or URL to a blocklist file (repeatable, comma-separated in env var) |
 
 On first run, a CA certificate and key are generated in the `--ca-dir` directory. You need to trust the CA certificate (`ca.crt`) in your OS or browser for HTTPS interception to work without warnings. Restart your browser after trusting the certificate.
 
@@ -186,6 +185,8 @@ Proxy code lives in `package main` in the project root. The `pkg/` directory con
 | `api_auth.go` | WebAuthn registration and login API endpoints |
 | `api_rules.go` | Per-user blocking rule CRUD API |
 | `api_subscriptions.go` | Per-user blocklist subscription API |
+| `api_activity.go` | Activity log API (recent events and stats) |
+| `activity.go` | In-memory activity log ring buffer |
 | `elemhide_inject.go` | Element hiding CSS injection into HTML responses |
 | `inject.go` | Bootstrap script and picker injection into HTML responses |
 | `websocket.go` | WebSocket upgrade detection and tunnel support |
@@ -197,7 +198,12 @@ Proxy code lives in `package main` in the project root. The `pkg/` directory con
 | `pkg/blocklist/` | Blocklist parsing (adblock + hosts-file), hostname matching, element hiding, resource type detection |
 | `pkg/store/` | SQLite persistence for credentials, sessions, rules, subscriptions, and cache |
 | `pkg/webauthn/` | Minimal WebAuthn server (ES256/P-256 with "none" attestation) |
-| `static/portal.html` | Portal management UI |
+| `static/portal.html` | Portal dashboard (auth, stats, quick links) |
+| `static/rules.html` | Rules management page (CRUD, search, syntax help) |
+| `static/subscriptions.html` | Subscriptions management (popular lists, add/remove) |
+| `static/activity.html` | Activity feed (filtered, auto-refresh) |
+| `static/shared.css` | Shared design system (CSS custom properties, nav, cards) |
+| `static/shared.js` | Shared auth, WebAuthn, nav helpers |
 | `static/setup.html` | Setup page for CA certificate installation |
 | `static/bootstrap.js` | Injected bootstrap script (keyboard shortcut, picker loader) |
 | `static/picker.js` | Element picker UI (Shadow DOM isolated) |
