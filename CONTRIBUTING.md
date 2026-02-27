@@ -45,18 +45,18 @@ mise run dev
 ./ublproxy [flags]
 ```
 
-| Flag | Default | Description |
-|---|---|---|
-| `--addr` | `0.0.0.0` | Address to listen on |
-| `--http-port` | `8080` | HTTP port for setup page and CA certificate download |
-| `--https-port` | `8443` | HTTPS port for proxy, portal, and API |
-| `--hostname` | `localhost` | Portal hostname for WebAuthn and TLS cert (must be a domain, not an IP) |
-| `--ca-dir` | `~/.ublproxy/` | Directory for CA certificate and key |
-| `--db` | `~/.ublproxy/ublproxy.db` | Path to SQLite database |
-| `--blocklist` | *(none)* | Path or URL to a blocklist file (can be specified multiple times) |
-| `--default-subscription` | EasyList + EasyPrivacy | Default blocklist subscription URL, always active for all users (can be specified multiple times) |
+| Flag | Env var | Default | Description |
+|---|---|---|---|
+| `--addr` | `UBLPROXY_ADDR` | `0.0.0.0` | Address to listen on |
+| `--http-port` | `UBLPROXY_HTTP_PORT` | `8080` | HTTP port for setup page and CA certificate download |
+| `--https-port` | `UBLPROXY_HTTPS_PORT` | `8443` | HTTPS port for proxy, portal, and API |
+| `--hostname` | `UBLPROXY_HOSTNAME` | `localhost` | Portal hostname for WebAuthn and TLS cert (must be a domain, not an IP) |
+| `--ca-dir` | `UBLPROXY_CA_DIR` | `~/.ublproxy/` | Directory for CA certificate and key |
+| `--db` | `UBLPROXY_DB` | `~/.ublproxy/ublproxy.db` | Path to SQLite database |
+| `--blocklist` | `UBLPROXY_BLOCKLIST` | *(none)* | Path or URL to a blocklist file (can be specified multiple times) |
+| `--default-subscription` | `UBLPROXY_DEFAULT_SUBSCRIPTION` | EasyList + EasyPrivacy | Default blocklist subscription URL, always active for all users (can be specified multiple times) |
 
-On first run, a CA certificate and key are generated in the `--ca-dir` directory. You need to trust the CA certificate (`ca.crt`) in your OS or browser for HTTPS interception to work without warnings.
+On first run, a CA certificate and key are generated in the `--ca-dir` directory. You need to trust the CA certificate (`ca.crt`) in your OS or browser for HTTPS interception to work without warnings. Restart your browser after trusting the certificate.
 
 ### Manual testing with curl
 
