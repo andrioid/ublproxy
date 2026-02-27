@@ -1,23 +1,18 @@
 package main
 
 import (
-	"flag"
+	"context"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
+
+	"github.com/urfave/cli/v3"
 
 	"ublproxy/pkg/store"
 	"ublproxy/pkg/webauthn"
 )
-
-// stringSlice implements flag.Value to support repeated CLI flags.
-type stringSlice []string
-
-func (s *stringSlice) String() string     { return strings.Join(*s, ", ") }
-func (s *stringSlice) Set(v string) error { *s = append(*s, v); return nil }
 
 func main() {
 	home, err := os.UserHomeDir()
@@ -28,33 +23,86 @@ func main() {
 
 	defaultDataDir := filepath.Join(home, ".ublproxy")
 
-	addr := flag.String("addr", "0.0.0.0", "address to listen on (0.0.0.0 for all interfaces)")
-	httpPort := flag.Int("http-port", 8080, "HTTP port for setup page and CA certificate download")
-	httpsPort := flag.Int("https-port", 8443, "HTTPS port for proxy, portal, and API")
-	hostname := flag.String("hostname", "localhost", "portal hostname for WebAuthn and TLS cert (must be a domain, not an IP)")
-	caDir := flag.String("ca-dir", defaultDataDir, "directory for CA certificate and key")
-	dbPath := flag.String("db", filepath.Join(defaultDataDir, "ublproxy.db"), "path to SQLite database")
+	cmd := &cli.Command{
+		Name:  "ublproxy",
+		Usage: "Ad-blocking HTTPS proxy with WebAuthn authentication",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "addr",
+				Value:   "0.0.0.0",
+				Usage:   "address to listen on (0.0.0.0 for all interfaces)",
+				Sources: cli.EnvVars("UBLPROXY_ADDR"),
+			},
+			&cli.IntFlag{
+				Name:    "http-port",
+				Value:   8080,
+				Usage:   "HTTP port for setup page and CA certificate download",
+				Sources: cli.EnvVars("UBLPROXY_HTTP_PORT"),
+			},
+			&cli.IntFlag{
+				Name:    "https-port",
+				Value:   8443,
+				Usage:   "HTTPS port for proxy, portal, and API",
+				Sources: cli.EnvVars("UBLPROXY_HTTPS_PORT"),
+			},
+			&cli.StringFlag{
+				Name:    "hostname",
+				Value:   "localhost",
+				Usage:   "portal hostname for WebAuthn and TLS cert (must be a domain, not an IP)",
+				Sources: cli.EnvVars("UBLPROXY_HOSTNAME"),
+			},
+			&cli.StringFlag{
+				Name:    "ca-dir",
+				Value:   defaultDataDir,
+				Usage:   "directory for CA certificate and key",
+				Sources: cli.EnvVars("UBLPROXY_CA_DIR"),
+			},
+			&cli.StringFlag{
+				Name:    "db",
+				Value:   filepath.Join(defaultDataDir, "ublproxy.db"),
+				Usage:   "path to SQLite database",
+				Sources: cli.EnvVars("UBLPROXY_DB"),
+			},
+			&cli.StringSliceFlag{
+				Name:    "blocklist",
+				Usage:   "path or URL to a blocklist file (can be specified multiple times)",
+				Sources: cli.EnvVars("UBLPROXY_BLOCKLIST"),
+			},
+			&cli.StringSliceFlag{
+				Name:    "default-subscription",
+				Usage:   "default blocklist subscription URL, always active for all users (can be specified multiple times; defaults to EasyList + EasyPrivacy if none specified)",
+				Sources: cli.EnvVars("UBLPROXY_DEFAULT_SUBSCRIPTION"),
+			},
+		},
+		Action: run,
+	}
 
-	var blocklistSources stringSlice
-	flag.Var(&blocklistSources, "blocklist", "path or URL to a blocklist file (can be specified multiple times)")
+	if err := cmd.Run(context.Background(), os.Args); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
 
-	var defaultSubs stringSlice
-	flag.Var(&defaultSubs, "default-subscription", "default blocklist subscription URL, always active for all users (can be specified multiple times; defaults to EasyList + EasyPrivacy if none specified)")
+func run(_ context.Context, cmd *cli.Command) error {
+	addr := cmd.String("addr")
+	httpPort := cmd.Int("http-port")
+	httpsPort := cmd.Int("https-port")
+	hostname := cmd.String("hostname")
+	caDir := cmd.String("ca-dir")
+	dbPath := cmd.String("db")
+	blocklistSources := cmd.StringSlice("blocklist")
 
-	flag.Parse()
-
-	// Built-in defaults if no --default-subscription flags were given
+	defaultSubs := cmd.StringSlice("default-subscription")
 	if len(defaultSubs) == 0 {
-		defaultSubs = stringSlice{
+		defaultSubs = []string{
 			"https://easylist.to/easylist/easylist.txt",
 			"https://easylist.to/easylist/easyprivacy.txt",
 		}
 	}
 
-	caCert, caKey, err := loadOrGenerateCA(*caDir)
+	caCert, caKey, err := loadOrGenerateCA(caDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "CA setup failed: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("CA setup failed: %w", err)
 	}
 
 	certs := newCertCache(caCert, caKey)
@@ -63,20 +111,16 @@ func main() {
 	handler.blocklistSources = blocklistSources
 	handler.defaultSubscriptions = defaultSubs
 
-	// Open SQLite database for credential/session/rule storage
-	db, err := store.Open(*dbPath)
+	db, err := store.Open(dbPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "database setup failed: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("database setup failed: %w", err)
 	}
 	defer db.Close()
 	handler.store = db
 
-	// Configure WebAuthn with the portal hostname. WebAuthn requires a
-	// domain name as RP ID — IP addresses are not allowed by the spec.
-	portalOrigin := fmt.Sprintf("https://%s:%d", *hostname, *httpsPort)
+	portalOrigin := fmt.Sprintf("https://%s:%d", hostname, httpsPort)
 	webauthnCfg := webauthn.Config{
-		RPID:     *hostname,
+		RPID:     hostname,
 		RPName:   "ublproxy",
 		RPOrigin: portalOrigin,
 	}
@@ -88,34 +132,26 @@ func main() {
 	handler.sessions = sm
 	handler.portalOrigin = portalOrigin
 
-	// Load baseline rules (--blocklist + --default-subscription) at startup.
-	// This runs synchronously so rules are ready before traffic arrives.
 	handler.reloadBaseline()
 
-	// Auto-detect LAN IP for the portal TLS cert so it covers both the
-	// hostname and the LAN IP (useful for CA cert download, etc.)
 	var extraIPs []net.IP
 	if lanIP := detectLANIP(); lanIP != "" {
 		extraIPs = append(extraIPs, net.ParseIP(lanIP))
 	}
 
-	// Start HTTPS proxy+portal server in a goroutine. This handles
-	// proxy CONNECT/forward, the management portal, and the API.
-	httpsAddr := fmt.Sprintf("%s:%d", *addr, *httpsPort)
+	httpsAddr := fmt.Sprintf("%s:%d", addr, httpsPort)
 	portalH := &portalHandler{proxy: handler, api: api}
-	go startPortalHTTPS(httpsAddr, *hostname, extraIPs, certs, portalH)
+	go startPortalHTTPS(httpsAddr, hostname, extraIPs, certs, portalH)
 
-	// HTTP server serves only the setup page and CA certificate download.
-	// No proxy, no API — those require TLS on the HTTPS port.
-	httpAddr := fmt.Sprintf("%s:%d", *addr, *httpPort)
+	httpAddr := fmt.Sprintf("%s:%d", addr, httpPort)
 	setupH := &setupHandler{caCertPEM: caCertPEM, portalOrigin: portalOrigin}
 	fmt.Fprintf(os.Stderr, "ublproxy setup page on http://%s\n", httpAddr)
 	fmt.Fprintf(os.Stderr, "ublproxy proxy+portal on %s\n", portalOrigin)
 
 	if err := http.ListenAndServe(httpAddr, setupH); err != nil {
-		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("server error: %w", err)
 	}
+	return nil
 }
 
 // detectLANIP returns the first non-loopback IPv4 address found on a network

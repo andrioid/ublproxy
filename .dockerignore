@@ -1,0 +1,6 @@
+.git/
+tmp/
+ublproxy
+*.test
+.playwright-cli/
+mise.local.toml

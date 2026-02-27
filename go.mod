@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/andybalholm/brotli v1.2.0
 	github.com/fxamacker/cbor/v2 v2.9.0
+	github.com/urfave/cli/v3 v3.6.2
 	golang.org/x/net v0.51.0
 	modernc.org/sqlite v1.46.1
 )
