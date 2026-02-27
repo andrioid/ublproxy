@@ -32,7 +32,6 @@
     border-radius: 3px;
     font-size: 0.9em;
   }
-  .section { border-top: 1px solid #eee; padding-top: 1rem; margin-top: 1rem; }
   .card {
     background: #f8fafc;
     border: 1px solid #e2e8f0;
@@ -78,6 +77,24 @@
     color: #666;
     margin-top: 0.5rem;
   }
+  details {
+    border-top: 1px solid #eee;
+    padding-top: 1rem;
+    margin-top: 1rem;
+  }
+  details:first-of-type {
+    border-top: none;
+    padding-top: 0;
+    margin-top: 0.5rem;
+  }
+  summary {
+    font-size: 1.1rem;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0.25rem 0;
+  }
+  summary:hover { color: #2563eb; }
+  details[open] summary { margin-bottom: 0.5rem; }
 </style>
 </head>
 <body>
@@ -100,8 +117,8 @@
     <h2>2. Install and Trust the Certificate</h2>
     <p style="margin-bottom: 0.5rem">Follow the instructions for your platform:</p>
 
-    <div class="section" style="border: none; padding-top: 0; margin-top: 0.5rem;">
-      <h2>macOS</h2>
+    <details>
+      <summary>macOS</summary>
       <ol>
         <li>Download <a href="/ca.crt">ca.crt</a> and open it &mdash; Keychain Access will launch</li>
         <li>Add the certificate to the <strong>System</strong> keychain</li>
@@ -109,10 +126,10 @@
         <li>Expand <strong>Trust</strong> and set <em>When using this certificate</em> to <strong>Always Trust</strong></li>
         <li><strong>Restart your browser</strong> for the change to take effect</li>
       </ol>
-    </div>
+    </details>
 
-    <div class="section">
-      <h2>iOS / iPadOS</h2>
+    <details>
+      <summary>iOS / iPadOS</summary>
       <ol>
         <li>Open this page on your device (scan the QR code above)</li>
         <li>Tap <a href="/ca.crt">Download CA Certificate</a> &mdash; a prompt appears to download the profile</li>
@@ -121,10 +138,10 @@
         <li>Go to <strong>Settings &rarr; General &rarr; About &rarr; Certificate Trust Settings</strong></li>
         <li>Enable full trust for <strong>ublproxy CA</strong></li>
       </ol>
-    </div>
+    </details>
 
-    <div class="section">
-      <h2>Android</h2>
+    <details>
+      <summary>Android</summary>
       <ol>
         <li>Open this page on your device (scan the QR code above)</li>
         <li>Tap <a href="/ca.crt">Download CA Certificate</a></li>
@@ -132,19 +149,19 @@
         <li>Select the downloaded <strong>ublproxy-ca.crt</strong> file and confirm</li>
       </ol>
       <p class="note">Menu paths vary by manufacturer (Samsung, Pixel, etc.).</p>
-    </div>
+    </details>
 
-    <div class="section">
-      <h2>Linux</h2>
+    <details>
+      <summary>Linux</summary>
       <ol>
         <li>Copy the certificate: <code>sudo cp ublproxy-ca.crt /usr/local/share/ca-certificates/</code></li>
         <li>Update the trust store: <code>sudo update-ca-certificates</code></li>
         <li><strong>Restart your browser</strong> for the change to take effect</li>
       </ol>
-    </div>
+    </details>
 
-    <div class="section">
-      <h2>Windows</h2>
+    <details>
+      <summary>Windows</summary>
       <ol>
         <li>Download <a href="/ca.crt">ca.crt</a> and double-click it</li>
         <li>Click <strong>Install Certificate</strong></li>
@@ -152,17 +169,17 @@
         <li>Choose <strong>Trusted Root Certification Authorities</strong> and finish the wizard</li>
         <li><strong>Restart your browser</strong> for the change to take effect</li>
       </ol>
-    </div>
+    </details>
 
-    <div class="section">
-      <h2>Firefox</h2>
+    <details>
+      <summary>Firefox</summary>
       <ol>
         <li>Open <strong>Settings &rarr; Privacy &amp; Security &rarr; Certificates &rarr; View Certificates</strong></li>
         <li>Click <strong>Import</strong> and select the downloaded <a href="/ca.crt">ca.crt</a></li>
         <li>Check <strong>Trust this CA to identify websites</strong> and confirm</li>
         <li><strong>Restart Firefox</strong> for the change to take effect</li>
       </ol>
-    </div>
+    </details>
   </div>
 
   <div class="card">
@@ -173,49 +190,47 @@
     <p style="margin-bottom: 0.5rem">PAC URL:</p>
     <code style="display:block; padding:0.6rem 0.8rem; font-size:1rem; word-break:break-all" id="pac-url"></code>
 
-    <div class="section" style="border: none; padding-top: 0; margin-top: 1rem;">
-      <h2>Firefox</h2>
+    <details>
+      <summary>Firefox</summary>
       <ol>
         <li>Open <strong>Settings &rarr; General &rarr; Network Settings &rarr; Settings&hellip;</strong></li>
         <li>Select <strong>Automatic proxy configuration URL</strong></li>
         <li>Enter the PAC URL shown above</li>
         <li>Click <strong>OK</strong></li>
       </ol>
-    </div>
+    </details>
 
-    <div class="section">
-      <h2>macOS (system-wide)</h2>
+    <details>
+      <summary>macOS (system-wide)</summary>
       <ol>
         <li>Open <strong>System Settings &rarr; Network &rarr; Wi-Fi &rarr; Details &rarr; Proxies</strong></li>
         <li>Enable <strong>Automatic Proxy Configuration</strong></li>
         <li>Enter the PAC URL shown above</li>
       </ol>
-    </div>
+    </details>
 
-    <div class="section">
-      <h2>Chromium / Chrome</h2>
+    <details>
+      <summary>Chromium / Chrome</summary>
       <p>Chromium-based browsers use the system proxy settings. Configure the PAC URL at the OS level, or launch with:</p>
       <code style="display:block; padding:0.6rem 0.8rem; margin-top:0.5rem; word-break:break-all" id="chrome-flag"></code>
-    </div>
+    </details>
 
-    <div class="section">
-      <h2>Mobile</h2>
-      <p style="margin-bottom: 0.5rem">Mobile devices (iOS/Android) use a separate PAC URL because they don't support HTTPS proxy connections:</p>
-      <code style="display:block; padding:0.6rem 0.8rem; font-size:1rem; word-break:break-all" id="mobile-pac-url"></code>
-    </div>
+    <h2 style="margin-top: 1.5rem">Mobile</h2>
+    <p style="margin-bottom: 0.5rem">Mobile devices (iOS/Android) use a separate PAC URL because they don't support HTTPS proxy connections:</p>
+    <code style="display:block; padding:0.6rem 0.8rem; font-size:1rem; word-break:break-all" id="mobile-pac-url"></code>
 
-    <div class="section" style="border: none; padding-top: 0; margin-top: 1rem;">
-      <h2>iOS / iPadOS</h2>
+    <details>
+      <summary>iOS / iPadOS</summary>
       <ol>
         <li>Go to <strong>Settings &rarr; Wi-Fi</strong></li>
         <li>Tap the info button (<strong>i</strong>) on your connected network</li>
         <li>Scroll to <strong>Configure Proxy</strong> and select <strong>Automatic</strong></li>
         <li>Enter the mobile PAC URL shown above</li>
       </ol>
-    </div>
+    </details>
 
-    <div class="section">
-      <h2>Android</h2>
+    <details>
+      <summary>Android</summary>
       <ol>
         <li>Go to <strong>Settings &rarr; Wi-Fi</strong></li>
         <li>Tap the gear icon on your connected network</li>
@@ -223,7 +238,7 @@
         <li>Enter the mobile PAC URL shown above</li>
       </ol>
       <p class="note">Some manufacturers label this setting differently. Look for proxy settings within your Wi-Fi network configuration.</p>
-    </div>
+    </details>
 
     <p style="margin-top: 1rem; font-size: 0.85rem; color: #666">
       The desktop PAC file routes traffic through the encrypted HTTPS proxy.

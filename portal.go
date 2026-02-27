@@ -182,6 +182,10 @@ func (p *proxyHandler) handlePortal(w http.ResponseWriter, r *http.Request) {
 		p.handleMobilePAC(w, r)
 		return
 	}
+	if r.URL.Path == "/qr.png" {
+		p.handleQR(w, r)
+		return
+	}
 	if r.URL.Path == "/" || r.URL.Path == "/setup" {
 		p.handleSetup(w, r)
 		return
@@ -197,6 +201,18 @@ func (p *proxyHandler) handlePAC(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
 	pacTmpl.Execute(w, struct{ ProxyHost string }{parsed.Host})
+}
+
+func (p *proxyHandler) handleQR(w http.ResponseWriter, r *http.Request) {
+	png, err := qrcode.Encode(p.httpOrigin, qrcode.Medium, 256)
+	if err != nil {
+		http.Error(w, "failed to generate QR code", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.WriteHeader(http.StatusOK)
+	w.Write(png)
 }
 
 func (p *proxyHandler) handleMobilePAC(w http.ResponseWriter, r *http.Request) {

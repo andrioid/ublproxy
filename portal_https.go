@@ -40,6 +40,10 @@ func (h *portalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.proxy.handleMobilePAC(w, r)
 		return
 	}
+	if r.URL.Path == "/qr.png" {
+		h.proxy.handleQR(w, r)
+		return
+	}
 	if r.URL.Path == "/setup" {
 		h.proxy.handleSetup(w, r)
 		return
