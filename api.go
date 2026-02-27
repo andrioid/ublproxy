@@ -37,6 +37,13 @@ type apiHandler struct {
 	// credential ID whose rules changed.
 	onRulesChanged func(credentialID string)
 
+	// defaultSubscriptions are auto-provisioned for each user on first
+	// login/register. Configured via --default-subscription CLI flags.
+	defaultSubscriptions []store.DefaultSubscription
+
+	// activityLog is the shared ring buffer for proxy event logging.
+	activityLog *ActivityLog
+
 	// challenges stores pending WebAuthn challenges keyed by base64url
 	// challenge value. Challenges are single-use and expire after challengeTTL.
 	challenges   map[string]challengeEntry
@@ -103,6 +110,16 @@ func (a *apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Subscription routes
 	if strings.HasPrefix(path, "/subscriptions") {
 		a.routeSubscriptions(w, r, path, sess)
+		return
+	}
+
+	// Activity routes
+	if path == "/activity" && r.Method == http.MethodGet {
+		a.handleActivity(w, r)
+		return
+	}
+	if path == "/activity/stats" && r.Method == http.MethodGet {
+		a.handleActivityStats(w, r)
 		return
 	}
 
@@ -188,6 +205,18 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) error {
 
 func jsonDecode(data []byte, v any) error {
 	return json.Unmarshal(data, v)
+}
+
+// ensureDefaults provisions default subscriptions for a user. Called after
+// successful register or login. Errors are logged but not propagated — the
+// user can still use the system without defaults.
+func (a *apiHandler) ensureDefaults(credentialID string) {
+	if len(a.defaultSubscriptions) == 0 {
+		return
+	}
+	if err := a.store.EnsureDefaultSubscriptions(credentialID, a.defaultSubscriptions); err != nil {
+		logError("ensure-defaults", err)
+	}
 }
 
 // handlePickerJS serves the element picker JavaScript. This is loaded by the

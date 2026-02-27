@@ -19,6 +19,7 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 	if p.shouldBlockHost(clientIP, host) {
+		p.logActivity(ActivityBlocked, host, "", "||"+host+"^")
 		http.Error(w, "blocked", http.StatusForbidden)
 		return
 	}
@@ -27,6 +28,7 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// The proxy never sees the plaintext — the client's TLS session
 	// goes straight to the upstream server.
 	if p.isHostExcepted(clientIP, host) {
+		p.logActivity(ActivityPassthrough, host, "", "@@||"+host+"^")
 		p.tunnelPassthrough(w, r, host, port)
 		return
 	}
@@ -125,6 +127,7 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port, clientI
 		// checked at CONNECT time; this catches path-specific rules)
 		ctx := matchContextFromRequest(req)
 		if p.shouldBlock(clientIP, targetURL, ctx) {
+			p.logActivity(ActivityBlocked, host, targetURL, "")
 			req.Body.Close()
 			blocked := &http.Response{
 				StatusCode: http.StatusNoContent,

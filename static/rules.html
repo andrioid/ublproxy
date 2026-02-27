@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rules - ublproxy</title>
+<link rel="stylesheet" href="/static/shared.css">
+</head>
+<body>
+<nav class="nav">
+  <a href="/" class="nav-brand">ublproxy</a>
+  <ul class="nav-links">
+    <li><a href="/" class="nav-link">Dashboard</a></li>
+    <li><a href="/rules" class="nav-link" data-auth>Rules</a></li>
+    <li><a href="/subscriptions" class="nav-link" data-auth>Subscriptions</a></li>
+    <li><a href="/activity" class="nav-link" data-auth>Activity</a></li>
+  </ul>
+  <div class="nav-right">
+    <span class="nav-status" id="nav-status">Checking&hellip;</span>
+    <a href="#" class="btn btn-ghost btn-sm hidden" id="nav-logout">Sign out</a>
+  </div>
+</nav>
+
+<main class="main">
+  <div id="unauth-view" class="hidden">
+    <div class="card auth-card">
+      <p class="page-subtitle">You need to <a href="/" style="color:var(--color-primary)">sign in</a> to manage rules.</p>
+    </div>
+  </div>
+
+  <div id="auth-view" class="hidden">
+    <div class="page-header">
+      <h1 class="page-title">Rules <span class="card-count" id="rules-count"></span></h1>
+      <p class="page-subtitle">Custom blocking and element hiding rules.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Add Rule</h3>
+      </div>
+      <div class="form-row">
+        <input type="text" class="form-input" id="rule-input" placeholder="Rule (e.g. ##.ad-banner or ||ads.example.com^)">
+        <input type="text" class="form-input form-input-narrow" id="rule-domain" placeholder="Domain (optional)">
+        <button class="btn btn-primary btn-sm" id="btn-add-rule">Add</button>
+      </div>
+      <div class="msg" id="rules-msg"></div>
+      <details style="margin-top:0.75rem">
+        <summary style="font-size:0.8rem;color:var(--color-text-muted);cursor:pointer">Syntax reference</summary>
+        <div class="help-text" style="margin-top:0.5rem">
+          <strong>Block a domain:</strong> <code>||ads.example.com^</code><br>
+          <strong>Block a URL pattern:</strong> <code>/ads/*</code> or <code>||example.com/ads/</code><br>
+          <strong>Hide an element:</strong> <code>##.ad-banner</code> or <code>example.com##.sidebar-ad</code><br>
+          <strong>Exception (allow):</strong> <code>@@||example.com^</code> (overrides blocks, enables passthrough)<br>
+          <strong>Unhide an element:</strong> <code>#@#.ad-banner</code> (overrides element hiding)<br>
+          <br>
+          You can also use the element picker (<kbd>Alt+Shift+B</kbd>) on any proxied page to visually select elements to hide.
+        </div>
+      </details>
+    </div>
+
+    <div class="card">
+      <div class="search-bar">
+        <input type="text" class="search-input" id="rules-search" placeholder="Search rules...">
+      </div>
+      <ul class="item-list" id="rules-list"></ul>
+      <div class="empty-state hidden" id="rules-empty">
+        No custom rules yet. Use the element picker (<kbd>Alt+Shift+B</kbd>) on any proxied page, or add one above.
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="/static/shared.js"></script>
+<script>
+(function() {
+  'use strict';
+  var U = window.ublproxy;
+
+  var rulesList = document.getElementById('rules-list');
+  var rulesEmpty = document.getElementById('rules-empty');
+  var rulesCount = document.getElementById('rules-count');
+  var rulesMsgEl = document.getElementById('rules-msg');
+  var ruleInput = document.getElementById('rule-input');
+  var ruleDomain = document.getElementById('rule-domain');
+  var searchInput = document.getElementById('rules-search');
+
+  var allRules = [];
+
+  function onAuth() {
+    U.show(document.getElementById('auth-view'));
+    U.hide(document.getElementById('unauth-view'));
+    loadRules();
+  }
+
+  function onUnauth() {
+    U.hide(document.getElementById('auth-view'));
+    U.show(document.getElementById('unauth-view'));
+  }
+
+  async function loadRules() {
+    try {
+      var resp = await fetch('/api/rules', { headers: U.authHeaders() });
+      if (!resp.ok) return;
+      allRules = await resp.json();
+      renderRules(allRules);
+    } catch (_) {}
+  }
+
+  function renderRules(rules) {
+    var query = (searchInput.value || '').toLowerCase();
+    var filtered = query ? rules.filter(function(r) {
+      return r.rule.toLowerCase().indexOf(query) >= 0 ||
+             (r.domain && r.domain.toLowerCase().indexOf(query) >= 0);
+    }) : rules;
+
+    rulesCount.textContent = '(' + rules.length + ')';
+    rulesList.innerHTML = '';
+
+    if (filtered.length === 0) {
+      if (rules.length === 0) {
+        U.show(rulesEmpty);
+      } else {
+        rulesEmpty.textContent = 'No rules match your search.';
+        rulesEmpty.style.fontStyle = 'italic';
+        U.show(rulesEmpty);
+      }
+      return;
+    }
+    U.hide(rulesEmpty);
+
+    filtered.forEach(function(r) {
+      var li = document.createElement('li');
+      li.className = 'item';
+
+      var toggle = document.createElement('label');
+      toggle.className = 'toggle';
+      toggle.innerHTML = '<input type="checkbox"' + (r.enabled ? ' checked' : '') + '><span class="toggle-slider"></span>';
+      toggle.querySelector('input').addEventListener('change', function() { toggleRule(r.id, this.checked); });
+
+      var text = document.createElement('span');
+      text.className = 'item-text';
+      text.textContent = r.rule;
+      text.title = r.rule;
+
+      var meta = document.createElement('span');
+      meta.className = 'item-meta';
+      meta.textContent = r.domain || 'all sites';
+
+      var del = document.createElement('button');
+      del.className = 'btn btn-danger btn-sm';
+      del.textContent = 'Delete';
+      del.addEventListener('click', function() { deleteRule(r.id); });
+
+      li.appendChild(toggle);
+      li.appendChild(text);
+      li.appendChild(meta);
+      li.appendChild(del);
+      rulesList.appendChild(li);
+    });
+  }
+
+  async function addRule() {
+    U.clearMsg(rulesMsgEl);
+    var rule = ruleInput.value.trim();
+    if (!rule) { U.showMsg(rulesMsgEl, 'Rule text is required.', 'error'); return; }
+    var domain = ruleDomain.value.trim();
+    try {
+      var resp = await fetch('/api/rules', {
+        method: 'POST', headers: U.authHeaders(), body: JSON.stringify({ rule: rule, domain: domain })
+      });
+      if (!resp.ok) { var e = await resp.json(); throw new Error(e.error || 'Failed to add rule'); }
+      ruleInput.value = '';
+      ruleDomain.value = '';
+      loadRules();
+    } catch (err) {
+      U.showMsg(rulesMsgEl, 'Failed: ' + err.message, 'error');
+    }
+  }
+
+  async function toggleRule(id, enabled) {
+    try {
+      await fetch('/api/rules/' + id, {
+        method: 'PATCH', headers: U.authHeaders(), body: JSON.stringify({ enabled: enabled })
+      });
+    } catch (_) {}
+  }
+
+  async function deleteRule(id) {
+    try {
+      await fetch('/api/rules/' + id, { method: 'DELETE', headers: U.authHeaders() });
+      loadRules();
+    } catch (_) {}
+  }
+
+  document.getElementById('btn-add-rule').addEventListener('click', addRule);
+  ruleInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') addRule(); });
+  searchInput.addEventListener('input', function() { renderRules(allRules); });
+
+  U.checkSession(onAuth, onUnauth);
+})();
+</script>
+</body>
+</html>

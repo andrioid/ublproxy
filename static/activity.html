@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Activity - ublproxy</title>
+<link rel="stylesheet" href="/static/shared.css">
+</head>
+<body>
+<nav class="nav">
+  <a href="/" class="nav-brand">ublproxy</a>
+  <ul class="nav-links">
+    <li><a href="/" class="nav-link">Dashboard</a></li>
+    <li><a href="/rules" class="nav-link" data-auth>Rules</a></li>
+    <li><a href="/subscriptions" class="nav-link" data-auth>Subscriptions</a></li>
+    <li><a href="/activity" class="nav-link" data-auth>Activity</a></li>
+  </ul>
+  <div class="nav-right">
+    <span class="nav-status" id="nav-status">Checking&hellip;</span>
+    <a href="#" class="btn btn-ghost btn-sm hidden" id="nav-logout">Sign out</a>
+  </div>
+</nav>
+
+<main class="main">
+  <div id="unauth-view" class="hidden">
+    <div class="card auth-card">
+      <p class="page-subtitle">You need to <a href="/" style="color:var(--color-primary)">sign in</a> to view activity.</p>
+    </div>
+  </div>
+
+  <div id="auth-view" class="hidden">
+    <div class="page-header">
+      <h1 class="page-title">Activity</h1>
+      <p class="page-subtitle">Recent proxy events. Auto-refreshes every 5 seconds.</p>
+    </div>
+
+    <div class="filter-bar" id="filter-bar">
+      <button class="filter-btn active" data-filter="all">All</button>
+      <button class="filter-btn" data-filter="blocked">Blocked</button>
+      <button class="filter-btn" data-filter="passthrough">Passthrough</button>
+      <button class="filter-btn" data-filter="element-hidden">Element Hidden</button>
+    </div>
+
+    <div class="card">
+      <ul class="item-list" id="activity-list"></ul>
+      <div class="empty-state" id="activity-empty">No activity yet. Browse the web through the proxy to see events here.</div>
+    </div>
+  </div>
+</main>
+
+<script src="/static/shared.js"></script>
+<script>
+(function() {
+  'use strict';
+  var U = window.ublproxy;
+
+  var activityList = document.getElementById('activity-list');
+  var activityEmpty = document.getElementById('activity-empty');
+  var activeFilter = 'all';
+  var refreshTimer = null;
+  var allEntries = [];
+
+  function onAuth() {
+    U.show(document.getElementById('auth-view'));
+    U.hide(document.getElementById('unauth-view'));
+    loadActivity();
+    refreshTimer = setInterval(loadActivity, 5000);
+  }
+
+  function onUnauth() {
+    U.hide(document.getElementById('auth-view'));
+    U.show(document.getElementById('unauth-view'));
+    if (refreshTimer) clearInterval(refreshTimer);
+  }
+
+  async function loadActivity() {
+    try {
+      var resp = await fetch('/api/activity?limit=200', { headers: U.authHeaders() });
+      if (!resp.ok) return;
+      allEntries = await resp.json();
+      renderActivity();
+    } catch (_) {}
+  }
+
+  function renderActivity() {
+    var filtered = activeFilter === 'all' ? allEntries : allEntries.filter(function(e) {
+      return e.type === activeFilter;
+    });
+
+    activityList.innerHTML = '';
+
+    if (filtered.length === 0) {
+      activityEmpty.textContent = activeFilter === 'all'
+        ? 'No activity yet. Browse the web through the proxy to see events here.'
+        : 'No ' + activeFilter + ' events.';
+      U.show(activityEmpty);
+      return;
+    }
+    U.hide(activityEmpty);
+
+    filtered.forEach(function(entry) {
+      var li = document.createElement('li');
+      li.className = 'activity-item';
+
+      var time = document.createElement('span');
+      time.className = 'activity-time';
+      time.textContent = formatTime(entry.timestamp);
+
+      var badge = document.createElement('span');
+      badge.className = 'badge ' + badgeClass(entry.type);
+      badge.textContent = entry.type;
+
+      var detail = document.createElement('div');
+      detail.className = 'activity-detail';
+      detail.textContent = entry.url || entry.host;
+
+      if (entry.rule) {
+        var ruleEl = document.createElement('div');
+        ruleEl.className = 'activity-rule';
+        ruleEl.textContent = entry.rule;
+        detail.appendChild(ruleEl);
+      }
+
+      li.appendChild(time);
+      li.appendChild(badge);
+      li.appendChild(detail);
+      activityList.appendChild(li);
+    });
+  }
+
+  function badgeClass(type) {
+    if (type === 'blocked') return 'badge-blocked';
+    if (type === 'passthrough') return 'badge-passthrough';
+    if (type === 'element-hidden') return 'badge-element';
+    return 'badge-allowed';
+  }
+
+  function formatTime(ts) {
+    if (!ts) return '';
+    var d = new Date(ts);
+    var h = d.getHours().toString().padStart(2, '0');
+    var m = d.getMinutes().toString().padStart(2, '0');
+    var s = d.getSeconds().toString().padStart(2, '0');
+    return h + ':' + m + ':' + s;
+  }
+
+  // Filter buttons
+  document.querySelectorAll('.filter-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      activeFilter = btn.dataset.filter;
+      renderActivity();
+    });
+  });
+
+  U.checkSession(onAuth, onUnauth);
+})();
+</script>
+</body>
+</html>

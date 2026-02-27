@@ -27,7 +27,7 @@ func (h *portalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.proxy.handleHTTP(w, r)
 		return
 	}
-	// Direct requests to this server (portal, API, setup, CA cert, PAC)
+	// Direct requests to this server (portal, API, setup, CA cert, PAC, static)
 	if r.URL.Path == "/ca.crt" {
 		h.proxy.handlePortalCACert(w, r)
 		return
@@ -42,6 +42,21 @@ func (h *portalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/" {
 		h.proxy.handlePortalIndex(w, r)
+		return
+	}
+	if r.URL.Path == "/rules" {
+		h.proxy.handlePortalRules(w, r)
+		return
+	}
+	if r.URL.Path == "/subscriptions" {
+		h.proxy.handlePortalSubscriptions(w, r)
+		return
+	}
+	if r.URL.Path == "/activity" {
+		h.proxy.handlePortalActivity(w, r)
+		return
+	}
+	if serveStaticFile(w, r.URL.Path) {
 		return
 	}
 	if len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" {

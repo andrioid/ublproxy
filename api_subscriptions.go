@@ -30,6 +30,7 @@ type subscriptionResponse struct {
 	URL       string `json:"url"`
 	Name      string `json:"name"`
 	Enabled   bool   `json:"enabled"`
+	IsDefault bool   `json:"isDefault"`
 	CreatedAt string `json:"createdAt"`
 }
 
@@ -39,6 +40,7 @@ func toSubscriptionResponse(s store.Subscription) subscriptionResponse {
 		URL:       s.URL,
 		Name:      s.Name,
 		Enabled:   s.Enabled,
+		IsDefault: s.IsDefault,
 		CreatedAt: s.CreatedAt.Format("2006-01-02T15:04:05Z"),
 	}
 }

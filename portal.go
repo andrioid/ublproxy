@@ -10,10 +10,48 @@ import (
 //go:embed static/portal.html
 var portalHTML string
 
+//go:embed static/rules.html
+var rulesHTML string
+
+//go:embed static/subscriptions.html
+var subscriptionsHTML string
+
+//go:embed static/activity.html
+var activityHTML string
+
+//go:embed static/shared.css
+var sharedCSS string
+
+//go:embed static/shared.js
+var sharedJS string
+
 //go:embed static/setup.html
 var setupHTML string
 
 var setupTmpl = template.Must(template.New("setup").Parse(setupHTML))
+
+// staticFiles maps /static/* paths to their embedded content and MIME type.
+var staticFiles = map[string]struct {
+	content     *string
+	contentType string
+}{
+	"/static/shared.css": {&sharedCSS, "text/css; charset=utf-8"},
+	"/static/shared.js":  {&sharedJS, "application/javascript; charset=utf-8"},
+}
+
+// serveStaticFile serves an embedded static file if it matches the path.
+// Returns true if the file was served.
+func serveStaticFile(w http.ResponseWriter, path string) bool {
+	entry, ok := staticFiles[path]
+	if !ok {
+		return false
+	}
+	w.Header().Set("Content-Type", entry.contentType)
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(*entry.content))
+	return true
+}
 
 // setupHandler serves the HTTP-only setup page and CA certificate.
 // No proxy, no API — those require TLS on the HTTPS port.
@@ -95,10 +133,26 @@ func (p *proxyHandler) handlePAC(w http.ResponseWriter, r *http.Request) {
 	pacTmpl.Execute(w, struct{ ProxyHost string }{parsed.Host})
 }
 
-func (p *proxyHandler) handlePortalIndex(w http.ResponseWriter, r *http.Request) {
+func serveHTML(w http.ResponseWriter, content string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(portalHTML))
+	w.Write([]byte(content))
+}
+
+func (p *proxyHandler) handlePortalIndex(w http.ResponseWriter, r *http.Request) {
+	serveHTML(w, portalHTML)
+}
+
+func (p *proxyHandler) handlePortalRules(w http.ResponseWriter, r *http.Request) {
+	serveHTML(w, rulesHTML)
+}
+
+func (p *proxyHandler) handlePortalSubscriptions(w http.ResponseWriter, r *http.Request) {
+	serveHTML(w, subscriptionsHTML)
+}
+
+func (p *proxyHandler) handlePortalActivity(w http.ResponseWriter, r *http.Request) {
+	serveHTML(w, activityHTML)
 }
 
 func (p *proxyHandler) handleSetup(w http.ResponseWriter, r *http.Request) {

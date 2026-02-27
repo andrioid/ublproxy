@@ -25,6 +25,9 @@ type proxyHandler struct {
 
 	portalOrigin string
 
+	// activityLog records recent proxy events for the activity feed.
+	activityLog *ActivityLog
+
 	// baselineRules are the always-active rules loaded from --blocklist
 	// sources and --default-subscription lists. These apply to all traffic
 	// regardless of user.
@@ -38,10 +41,6 @@ type proxyHandler struct {
 	// blocklistSources are the static blocklist file paths/URLs loaded at
 	// startup (from CLI --blocklist flags).
 	blocklistSources []string
-
-	// defaultSubscriptions are the default blocklist subscription URLs
-	// (from CLI --default-subscription flags or the built-in defaults).
-	defaultSubscriptions []string
 
 	// reloadMu serializes baseline rule reloads to prevent concurrent rebuilds.
 	reloadMu sync.Mutex
@@ -203,9 +202,8 @@ func (p *proxyHandler) shouldBlockHost(clientIP, host string) bool {
 const blocklistCacheTTL = 24 * time.Hour
 
 // reloadBaseline rebuilds the baseline RuleSet from --blocklist sources
-// and --default-subscription URLs. Remote URLs are cached in the database
-// to avoid re-downloading on every reload. This does not include per-user
-// rules — those are loaded lazily via getUserRules.
+// (static files/URLs). Default subscriptions are per-user (provisioned on
+// auth) and loaded via getUserRules, not included here.
 func (p *proxyHandler) reloadBaseline() {
 	p.reloadMu.Lock()
 	defer p.reloadMu.Unlock()
@@ -219,15 +217,10 @@ func (p *proxyHandler) reloadBaseline() {
 		}
 	}
 
-	// Load default subscription URLs (EasyList, EasyPrivacy, etc.)
-	for _, url := range p.defaultSubscriptions {
-		if err := p.loadBlocklistSource(rs, url); err != nil {
-			fmt.Fprintf(os.Stderr, "baseline: failed to load subscription %s: %v\n", url, err)
-		}
-	}
-
 	p.baselineRules.Store(rs)
-	fmt.Fprintf(os.Stderr, "baseline: loaded %d hostnames, %d URL rules\n", rs.HostCount(), rs.RuleCount())
+	if rs.HostCount() > 0 || rs.RuleCount() > 0 {
+		fmt.Fprintf(os.Stderr, "baseline: loaded %d hostnames, %d URL rules\n", rs.HostCount(), rs.RuleCount())
+	}
 }
 
 // loadBlocklistSource loads a blocklist from a file path or URL into the
@@ -292,6 +285,19 @@ func downloadBlocklist(url string) ([]byte, error) {
 		return nil, fmt.Errorf("read %s: %w", url, err)
 	}
 	return []byte(buf.String()), nil
+}
+
+// logActivity records a proxy event to the activity log if available.
+func (p *proxyHandler) logActivity(entryType, host, url, rule string) {
+	if p.activityLog == nil {
+		return
+	}
+	p.activityLog.Add(ActivityEntry{
+		Type: entryType,
+		Host: host,
+		URL:  url,
+		Rule: rule,
+	})
 }
 
 func (p *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

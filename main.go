@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/urfave/cli/v3"
 
@@ -70,7 +71,7 @@ func main() {
 			},
 			&cli.StringSliceFlag{
 				Name:    "default-subscription",
-				Usage:   "default blocklist subscription URL, always active for all users (can be specified multiple times; defaults to EasyList + EasyPrivacy if none specified)",
+				Usage:   "default blocklist subscription URL, auto-provisioned for each user on login (can be specified multiple times; defaults to EasyList + EasyPrivacy if none specified)",
 				Sources: cli.EnvVars("UBLPROXY_DEFAULT_SUBSCRIPTION"),
 			},
 		},
@@ -92,12 +93,18 @@ func run(_ context.Context, cmd *cli.Command) error {
 	dbPath := cmd.String("db")
 	blocklistSources := cmd.StringSlice("blocklist")
 
-	defaultSubs := cmd.StringSlice("default-subscription")
-	if len(defaultSubs) == 0 {
-		defaultSubs = []string{
+	defaultSubURLs := cmd.StringSlice("default-subscription")
+	if len(defaultSubURLs) == 0 {
+		defaultSubURLs = []string{
 			"https://easylist.to/easylist/easylist.txt",
 			"https://easylist.to/easylist/easyprivacy.txt",
 		}
+	}
+
+	// Build DefaultSubscription list with human-readable names
+	defaultSubs := make([]store.DefaultSubscription, len(defaultSubURLs))
+	for i, u := range defaultSubURLs {
+		defaultSubs[i] = store.DefaultSubscription{URL: u, Name: defaultSubName(u)}
 	}
 
 	caCert, caKey, err := loadOrGenerateCA(caDir)
@@ -108,8 +115,9 @@ func run(_ context.Context, cmd *cli.Command) error {
 	certs := newCertCache(caCert, caKey)
 	caCertPEM := encodeCertPEM(caCert)
 	handler := newProxyHandler(certs, caCertPEM)
+	activityLog := NewActivityLog(1000)
+	handler.activityLog = activityLog
 	handler.blocklistSources = blocklistSources
-	handler.defaultSubscriptions = defaultSubs
 
 	db, err := store.Open(dbPath)
 	if err != nil {
@@ -128,6 +136,8 @@ func run(_ context.Context, cmd *cli.Command) error {
 	sm := newSessionMap()
 	api := newAPIHandler(db, webauthnCfg, sm)
 	api.onRulesChanged = handler.invalidateUserRules
+	api.defaultSubscriptions = defaultSubs
+	api.activityLog = activityLog
 	handler.api = api
 	handler.sessions = sm
 	handler.portalOrigin = portalOrigin
@@ -152,6 +162,23 @@ func run(_ context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("server error: %w", err)
 	}
 	return nil
+}
+
+// defaultSubName derives a human-readable name from a blocklist URL.
+// Recognizes well-known lists; falls back to the filename.
+func defaultSubName(rawURL string) string {
+	knownNames := map[string]string{
+		"https://easylist.to/easylist/easylist.txt":    "EasyList",
+		"https://easylist.to/easylist/easyprivacy.txt": "EasyPrivacy",
+	}
+	if name, ok := knownNames[rawURL]; ok {
+		return name
+	}
+	// Extract filename from URL path
+	if idx := strings.LastIndex(rawURL, "/"); idx >= 0 && idx < len(rawURL)-1 {
+		return rawURL[idx+1:]
+	}
+	return rawURL
 }
 
 // detectLANIP returns the first non-loopback IPv4 address found on a network

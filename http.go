@@ -36,6 +36,7 @@ func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := matchContextFromRequest(r)
 	clientIP := clientIPFromRequest(r)
 	if p.shouldBlock(clientIP, r.URL.String(), ctx) {
+		p.logActivity(ActivityBlocked, r.URL.Hostname(), r.URL.String(), "")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

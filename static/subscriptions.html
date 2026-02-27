@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subscriptions - ublproxy</title>
+<link rel="stylesheet" href="/static/shared.css">
+</head>
+<body>
+<nav class="nav">
+  <a href="/" class="nav-brand">ublproxy</a>
+  <ul class="nav-links">
+    <li><a href="/" class="nav-link">Dashboard</a></li>
+    <li><a href="/rules" class="nav-link" data-auth>Rules</a></li>
+    <li><a href="/subscriptions" class="nav-link" data-auth>Subscriptions</a></li>
+    <li><a href="/activity" class="nav-link" data-auth>Activity</a></li>
+  </ul>
+  <div class="nav-right">
+    <span class="nav-status" id="nav-status">Checking&hellip;</span>
+    <a href="#" class="btn btn-ghost btn-sm hidden" id="nav-logout">Sign out</a>
+  </div>
+</nav>
+
+<main class="main">
+  <div id="unauth-view" class="hidden">
+    <div class="card auth-card">
+      <p class="page-subtitle">You need to <a href="/" style="color:var(--color-primary)">sign in</a> to manage subscriptions.</p>
+    </div>
+  </div>
+
+  <div id="auth-view" class="hidden">
+    <div class="page-header">
+      <h1 class="page-title">Subscriptions <span class="card-count" id="subs-count"></span></h1>
+      <p class="page-subtitle">Blocklist subscriptions that provide blocking rules from community-maintained lists.</p>
+    </div>
+
+    <!-- Default subscriptions -->
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Default Lists</h3>
+        <button class="btn btn-secondary btn-sm" id="btn-refresh-subs">Refresh All</button>
+      </div>
+      <p class="help-text" style="margin-top:0;margin-bottom:0.5rem">
+        These lists are enabled by default. You can disable them if they cause issues.
+      </p>
+      <ul class="item-list" id="default-list"></ul>
+      <div class="empty-state hidden" id="default-empty">No default subscriptions configured.</div>
+      <div class="msg" id="default-msg"></div>
+    </div>
+
+    <!-- User subscriptions -->
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Your Subscriptions</h3>
+      </div>
+      <ul class="item-list" id="user-list"></ul>
+      <div class="empty-state hidden" id="user-empty">No custom subscriptions. Add one below or choose a suggested list.</div>
+
+      <div class="form-row">
+        <input type="text" class="form-input" id="sub-url" placeholder="Blocklist URL (e.g. https://easylist.to/easylist/easylist.txt)">
+        <input type="text" class="form-input form-input-narrow" id="sub-name" placeholder="Name (optional)">
+        <button class="btn btn-primary btn-sm" id="btn-add-sub">Add</button>
+      </div>
+
+      <div class="suggested" style="margin-top:0.75rem">
+        <span class="suggested-label">Suggested:</span>
+        <a href="#" class="suggest-link" data-url="https://easylist.to/easylist/easylist.txt" data-name="EasyList">EasyList</a>,
+        <a href="#" class="suggest-link" data-url="https://easylist.to/easylist/easyprivacy.txt" data-name="EasyPrivacy">EasyPrivacy</a>,
+        <a href="#" class="suggest-link" data-url="https://raw.githubusercontent.com/nickspaargaren/no-google/refs/heads/master/pihole-google.txt" data-name="No Google">No Google</a>,
+        <a href="#" class="suggest-link" data-url="https://easylist.to/easylist/fanboy-social.txt" data-name="Fanboy Social">Fanboy Social</a>,
+        <a href="#" class="suggest-link" data-url="https://secure.fanboy.co.nz/fanboy-annoyance.txt" data-name="Fanboy Annoyances">Fanboy Annoyances</a>
+      </div>
+
+      <div class="msg" id="subs-msg"></div>
+    </div>
+  </div>
+</main>
+
+<script src="/static/shared.js"></script>
+<script>
+(function() {
+  'use strict';
+  var U = window.ublproxy;
+
+  var defaultListEl = document.getElementById('default-list');
+  var defaultEmptyEl = document.getElementById('default-empty');
+  var defaultMsgEl = document.getElementById('default-msg');
+  var userListEl = document.getElementById('user-list');
+  var userEmptyEl = document.getElementById('user-empty');
+  var subsCount = document.getElementById('subs-count');
+  var subsMsgEl = document.getElementById('subs-msg');
+  var subUrl = document.getElementById('sub-url');
+  var subName = document.getElementById('sub-name');
+
+  function onAuth() {
+    U.show(document.getElementById('auth-view'));
+    U.hide(document.getElementById('unauth-view'));
+    loadSubscriptions();
+  }
+
+  function onUnauth() {
+    U.hide(document.getElementById('auth-view'));
+    U.show(document.getElementById('unauth-view'));
+  }
+
+  async function loadSubscriptions() {
+    try {
+      var resp = await fetch('/api/subscriptions', { headers: U.authHeaders() });
+      if (!resp.ok) return;
+      var subs = await resp.json();
+      renderSubscriptions(subs);
+    } catch (_) {}
+  }
+
+  function renderSubscriptions(subs) {
+    subsCount.textContent = '(' + subs.length + ')';
+
+    var defaults = subs.filter(function(s) { return s.isDefault; });
+    var userSubs = subs.filter(function(s) { return !s.isDefault; });
+
+    renderSubList(defaultListEl, defaultEmptyEl, defaults);
+    renderSubList(userListEl, userEmptyEl, userSubs);
+  }
+
+  function renderSubList(listEl, emptyEl, subs) {
+    listEl.innerHTML = '';
+    if (subs.length === 0) {
+      U.show(emptyEl);
+      return;
+    }
+    U.hide(emptyEl);
+
+    subs.forEach(function(s) {
+      var li = document.createElement('li');
+      li.className = 'item';
+
+      var toggle = document.createElement('label');
+      toggle.className = 'toggle';
+      toggle.innerHTML = '<input type="checkbox"' + (s.enabled ? ' checked' : '') + '><span class="toggle-slider"></span>';
+      toggle.querySelector('input').addEventListener('change', function() { toggleSubscription(s.id, this.checked); });
+
+      var info = document.createElement('div');
+      info.className = 'item-info';
+
+      var nameRow = document.createElement('div');
+      nameRow.className = 'item-name';
+      nameRow.textContent = s.name || s.url;
+      if (s.isDefault) {
+        var badge = document.createElement('span');
+        badge.className = 'badge badge-default';
+        badge.textContent = 'Default';
+        badge.style.marginLeft = '0.5rem';
+        nameRow.appendChild(badge);
+      }
+      info.appendChild(nameRow);
+
+      if (s.name) {
+        var urlRow = document.createElement('div');
+        urlRow.className = 'item-url';
+        urlRow.textContent = s.url;
+        info.appendChild(urlRow);
+      }
+
+      li.appendChild(toggle);
+      li.appendChild(info);
+
+      if (!s.isDefault) {
+        var del = document.createElement('button');
+        del.className = 'btn btn-danger btn-sm';
+        del.textContent = 'Delete';
+        del.addEventListener('click', function() { deleteSubscription(s.id); });
+        li.appendChild(del);
+      }
+
+      listEl.appendChild(li);
+    });
+  }
+
+  async function addSubscription(url, name) {
+    U.clearMsg(subsMsgEl);
+    if (!url) { U.showMsg(subsMsgEl, 'URL is required.', 'error'); return; }
+    try {
+      var resp = await fetch('/api/subscriptions', {
+        method: 'POST', headers: U.authHeaders(), body: JSON.stringify({ url: url, name: name || '' })
+      });
+      if (!resp.ok) { var e = await resp.json(); throw new Error(e.error || 'Failed to add subscription'); }
+      subUrl.value = '';
+      subName.value = '';
+      U.showMsg(subsMsgEl, 'Subscription added.', 'success');
+      loadSubscriptions();
+    } catch (err) {
+      U.showMsg(subsMsgEl, 'Failed: ' + err.message, 'error');
+    }
+  }
+
+  async function toggleSubscription(id, enabled) {
+    try {
+      await fetch('/api/subscriptions/' + id, {
+        method: 'PATCH', headers: U.authHeaders(), body: JSON.stringify({ enabled: enabled })
+      });
+    } catch (_) {}
+  }
+
+  async function deleteSubscription(id) {
+    try {
+      await fetch('/api/subscriptions/' + id, { method: 'DELETE', headers: U.authHeaders() });
+      loadSubscriptions();
+    } catch (_) {}
+  }
+
+  async function refreshSubscriptions() {
+    U.clearMsg(defaultMsgEl);
+    var btn = document.getElementById('btn-refresh-subs');
+    btn.disabled = true;
+    btn.textContent = 'Refreshing\u2026';
+    try {
+      var resp = await fetch('/api/subscriptions/refresh', { method: 'POST', headers: U.authHeaders() });
+      if (!resp.ok) { var e = await resp.json(); throw new Error(e.error || 'Refresh failed'); }
+      U.showMsg(defaultMsgEl, 'All blocklists refreshed.', 'success');
+    } catch (err) {
+      U.showMsg(defaultMsgEl, 'Refresh failed: ' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Refresh All';
+    }
+  }
+
+  document.getElementById('btn-add-sub').addEventListener('click', function() {
+    addSubscription(subUrl.value.trim(), subName.value.trim());
+  });
+  subUrl.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') addSubscription(subUrl.value.trim(), subName.value.trim());
+  });
+  document.getElementById('btn-refresh-subs').addEventListener('click', refreshSubscriptions);
+
+  document.querySelectorAll('.suggest-link').forEach(function(link) {
+    link.addEventListener('click', function(e) {
+      e.preventDefault();
+      addSubscription(this.dataset.url, this.dataset.name);
+    });
+  });
+
+  U.checkSession(onAuth, onUnauth);
+})();
+</script>
+</body>
+</html>

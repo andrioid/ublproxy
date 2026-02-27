@@ -166,4 +166,4 @@ All flags can also be set via environment variables. Environment variables take 
 | `--ca-dir` | `UBLPROXY_CA_DIR` | `~/.ublproxy` | Directory for CA certificate and key |
 | `--db` | `UBLPROXY_DB` | `~/.ublproxy/ublproxy.db` | Path to SQLite database |
 | `--blocklist` | `UBLPROXY_BLOCKLIST` | *(none)* | Path or URL to a blocklist file (repeatable) |
-| `--default-subscription` | `UBLPROXY_DEFAULT_SUBSCRIPTION` | EasyList + EasyPrivacy | Default blocklist subscription URL (repeatable) |
+| `--default-subscription` | `UBLPROXY_DEFAULT_SUBSCRIPTION` | EasyList + EasyPrivacy | Default blocklist subscription URL, auto-provisioned per user on login (repeatable) |
