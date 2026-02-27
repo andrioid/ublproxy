@@ -1,10 +1,44 @@
 # ublproxy
 
-A proxy-server that filters ads from HTTPS/TLS traffic using adblock rules, with interactive element picking for custom rules.
+A network-wide adblock proxy-server w. adblock list support, custom rules and passkey users. Easy to set up and host yourself.
 
-See [QUICK_START.md](QUICK_START.md) for setup instructions (local and Docker).
+## Problem domain
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development.
+Browsers were supposed to be "user-agents", but modern browsers are far more catered to ad-selling corporations, than they are to users.
+
+Existing solutions, such as [pihole](https://pi-hole.net/) and other dns-based solutions are only sufficient, if you want to block an entire hostname. Browser extensions used to work well, but with the latest [Manifest changes](https://adlock.com/blog/chrome-killing-adblock/), they are not as effective as they used to be.
+
+## Features
+
+### Adblock Plus lists
+
+Subscribe to community-maintained blocklists like EasyList and EasyPrivacy. Lists are fetched and parsed automatically, and rules are applied to all proxied traffic.
+
+### Custom rules
+
+Add your own blocking and element-hiding rules using adblock filter syntax, or use the interactive element picker (Alt+Shift+B) to visually select elements to hide on any proxied page.
+
+### Encrypted, all the way
+
+The proxy listens on HTTPS. Traffic between browser and proxy is encrypted, and the proxy generates per-host TLS certificates on the fly using its own CA.
+
+### Strips away scripts, images and embeds
+
+Blocked requests for scripts, images, iframes and other embedded resources are stopped at the proxy before they reach your browser.
+
+### Hides the rest
+
+CSS is injected into HTML responses to hide elements matching element-hiding rules. The proxy decompresses HTML, injects the CSS, and serves it back — removing ad containers, banners and other unwanted elements visually.
+
+### Users and custom rules
+
+WebAuthn passkey authentication gives each user their own set of rules and subscriptions, layered on top of any server-configured blocklists.
+
+## Security
+
+### Man-In-The-Middle
+
+It's important to be aware, that by using this solution, you're essentially decrypting all of your traffic, messing with it and then encrypting it again before it reaches the browser. If ublproxy was a service on the Internet, that should make you very suspicious. But, this is intended to be run on small local networks to improve privacy, and ad-free browsing.
 
 ## Known limitations
 
@@ -15,4 +49,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development.
 
 ## References
 
-- [adblock rules cheatsheet](https://adblockplus.org/filter-cheatsheet)
+- See [QUICK_START.md](QUICK_START.md) for setup instructions (local and Docker).
+- See [CONTRIBUTING.md](CONTRIBUTING.md) for development.
+- See [adblock rules cheatsheet](https://adblockplus.org/filter-cheatsheet) for adblock plus filter syntax details.
