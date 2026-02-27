@@ -23,6 +23,14 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Host-level @@ exception: tunnel traffic directly without MITM.
+	// The proxy never sees the plaintext — the client's TLS session
+	// goes straight to the upstream server.
+	if p.isHostExcepted(clientIP, host) {
+		p.tunnelPassthrough(w, r, host, port)
+		return
+	}
+
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
@@ -63,6 +71,37 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Extract client IP for script injection (from the original CONNECT request)
 	cIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 	p.proxyTLSRequests(tlsClientConn, host, port, cIP)
+}
+
+// tunnelPassthrough establishes a transparent TCP tunnel between the client
+// and upstream server. No MITM, no cert generation, no request inspection.
+// The proxy only sees connection metadata (hostname, timing, bytes transferred).
+func (p *proxyHandler) tunnelPassthrough(w http.ResponseWriter, r *http.Request, host, port string) {
+	upstream, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), 10*time.Second)
+	if err != nil {
+		logError("passthrough/dial", err)
+		http.Error(w, "upstream unreachable", http.StatusBadGateway)
+		return
+	}
+	defer upstream.Close()
+
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+
+	clientConn, _, err := hijacker.Hijack()
+	if err != nil {
+		logError("passthrough/hijack", err)
+		return
+	}
+	defer clientConn.Close()
+
+	logPassthrough(host)
+	bidirectionalCopy(clientConn, upstream)
 }
 
 // proxyTLSRequests reads HTTP requests from the intercepted client TLS

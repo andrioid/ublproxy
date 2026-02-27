@@ -156,6 +156,23 @@ func (p *proxyHandler) shouldBlock(clientIP, url string, ctx blocklist.MatchCont
 	return false
 }
 
+// isHostExcepted checks whether a host has an active @@ exception rule.
+// Used at CONNECT time to decide between MITM and passthrough tunneling.
+func (p *proxyHandler) isHostExcepted(clientIP, host string) bool {
+	credID := p.credentialForIP(clientIP)
+	userRS := p.getUserRules(credID)
+	if userRS != nil && userRS.MatchesExceptionHost(host) {
+		return true
+	}
+
+	baseline := p.getBaselineRules()
+	if baseline != nil && baseline.MatchesExceptionHost(host) {
+		return true
+	}
+
+	return false
+}
+
 // shouldBlockHost checks whether a host should be blocked at the CONNECT
 // level, applying layered evaluation like shouldBlock.
 func (p *proxyHandler) shouldBlockHost(clientIP, host string) bool {

@@ -31,11 +31,12 @@ import (
 
 // testEnv holds everything needed to run a proxy e2e test.
 type testEnv struct {
-	proxyURL string
-	httpURL  string
-	httpsURL string
-	caPool   *x509.CertPool
-	handler  *proxyHandler
+	proxyURL     string
+	httpURL      string
+	httpsURL     string
+	caPool       *x509.CertPool
+	upstreamPool *x509.CertPool
+	handler      *proxyHandler
 }
 
 // startTestEnv spins up an upstream HTTP server, an upstream HTTPS server, and
@@ -86,11 +87,12 @@ func startTestEnv(t *testing.T, upstreamHandler http.Handler, rules *blocklist.R
 	})
 
 	return &testEnv{
-		proxyURL: proxyServer.URL,
-		httpURL:  httpServer.URL,
-		httpsURL: httpsServer.URL,
-		caPool:   caPool,
-		handler:  handler,
+		proxyURL:     proxyServer.URL,
+		httpURL:      httpServer.URL,
+		httpsURL:     httpsServer.URL,
+		caPool:       caPool,
+		upstreamPool: upstreamCAPool,
+		handler:      handler,
 	}
 }
 
@@ -101,7 +103,7 @@ func (e *testEnv) httpsHost() string {
 }
 
 // httpClient returns an *http.Client configured to route through the proxy.
-// For HTTPS requests, it trusts the test CA.
+// For HTTPS requests, it trusts the test CA (MITM certs).
 func (e *testEnv) httpClient(t *testing.T) *http.Client {
 	t.Helper()
 
@@ -115,6 +117,27 @@ func (e *testEnv) httpClient(t *testing.T) *http.Client {
 			Proxy: http.ProxyURL(proxyURL),
 			TLSClientConfig: &tls.Config{
 				RootCAs: e.caPool,
+			},
+		},
+	}
+}
+
+// passthroughClient returns an *http.Client configured to route through the
+// proxy but trusting the upstream server's TLS cert (not the proxy CA).
+// Used for testing passthrough tunnels where no MITM occurs.
+func (e *testEnv) passthroughClient(t *testing.T) *http.Client {
+	t.Helper()
+
+	proxyURL, err := url.Parse(e.proxyURL)
+	if err != nil {
+		t.Fatalf("parse proxy URL: %v", err)
+	}
+
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+			TLSClientConfig: &tls.Config{
+				RootCAs: e.upstreamPool,
 			},
 		},
 	}
@@ -2223,5 +2246,104 @@ func TestWebSocketHTTPS(t *testing.T) {
 
 	if string(frame.payload) != "hello secure websocket" {
 		t.Errorf("echo = %q, want %q", frame.payload, "hello secure websocket")
+	}
+}
+
+func TestPassthroughTunnelForExceptedHost(t *testing.T) {
+	var upstreamHit atomic.Bool
+
+	rs := blocklist.NewRuleSet()
+	// Block all subresources, but except the upstream host entirely
+	rs.AddHostname("ads.example.com")
+	rs.AddException("@@||127.0.0.1^")
+
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHit.Store(true)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("passthrough response"))
+	}), rs)
+
+	// Use passthroughClient which trusts the upstream cert directly.
+	// If MITM were happening, this client would reject the proxy's MITM
+	// cert because it doesn't trust the proxy CA.
+	client := env.passthroughClient(t)
+
+	resp, err := client.Get(env.httpsURL + "/secure-page")
+	if err != nil {
+		t.Fatalf("GET through passthrough tunnel: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if string(body) != "passthrough response" {
+		t.Errorf("body = %q, want %q", body, "passthrough response")
+	}
+	if !upstreamHit.Load() {
+		t.Error("upstream was not hit")
+	}
+}
+
+func TestMITMClientFailsOnPassthroughTunnel(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddException("@@||127.0.0.1^")
+
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), rs)
+
+	// The standard httpClient trusts only the proxy CA. For a passthrough
+	// tunnel the client sees the upstream server's cert, not a MITM cert,
+	// so this client should fail TLS verification.
+	client := env.httpClient(t)
+	_, err := client.Get(env.httpsURL + "/test")
+	if err == nil {
+		t.Error("expected TLS error from MITM client on passthrough tunnel, got nil")
+	}
+}
+
+func TestNonExceptedHostStillMITMd(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	// Exception only for a different domain, not the upstream host
+	rs.AddException("@@||banking.example.com^")
+
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("mitm response"))
+	}), rs)
+
+	// Standard MITM client should work because the upstream host is not excepted
+	client := env.httpClient(t)
+	resp, err := client.Get(env.httpsURL + "/page")
+	if err != nil {
+		t.Fatalf("GET through MITM: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if string(body) != "mitm response" {
+		t.Errorf("body = %q, want %q", body, "mitm response")
+	}
+}
+
+func TestBlockedHostStillBlockedWithExceptions(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddHostname("127.0.0.1")
+	// Exception for a different host should not affect the blocked one
+	rs.AddException("@@||banking.example.com^")
+
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), rs)
+
+	client := env.httpClient(t)
+	_, err := client.Get(env.httpsURL + "/should-be-blocked")
+	if err == nil {
+		t.Error("expected error for blocked HTTPS host, got nil")
 	}
 }

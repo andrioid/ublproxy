@@ -129,6 +129,30 @@ curl -s https://localhost:8443/api/rules/1 \
 
 Rules follow [adblock filter syntax](https://adblockplus.org/filter-cheatsheet). Element hiding rules use `domain##selector` format.
 
+## Passthrough exceptions
+
+Domains with a `@@` host-level exception rule are tunneled directly without MITM interception. The proxy relays encrypted bytes between client and upstream without seeing the traffic content. This is useful for sensitive sites like banking where you don't want the proxy to inspect traffic.
+
+**Global exception** (in a blocklist file passed via `--blocklist`):
+
+```
+@@||bankofamerica.com^
+@@||chase.com^
+```
+
+**Per-user exception** (via the portal UI or API):
+
+```bash
+curl -s https://localhost:8443/api/rules \
+  -X POST -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"rule": "@@||bankofamerica.com^"}'
+```
+
+Exception rules match the domain and all subdomains (e.g. `@@||bankofamerica.com^` also covers `www.bankofamerica.com`, `login.bankofamerica.com`, etc.).
+
+Per-user exceptions only affect that user's traffic. Other users still get normal MITM filtering for the same domain unless they also add an exception.
+
 ## CLI flags and environment variables
 
 All flags can also be set via environment variables. Environment variables take precedence over defaults but CLI flags take precedence over environment variables.
