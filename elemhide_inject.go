@@ -151,6 +151,8 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 		safeCSS := styleCloseRe.ReplaceAllString(css, `<\/style`)
 		styleTag := []byte("<style>" + safeCSS + "</style>")
 		modified = injectStyleTag(modified, styleTag)
+		p.logActivity(ActivityElementHidden, host, "", "", clientIP, credID)
+		logElementHidden(host, clientIP, credID)
 	}
 
 	// Inject the bootstrap script for the element picker

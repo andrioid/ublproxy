@@ -142,7 +142,7 @@ func (a *apiHandler) handleRegisterFinish(w http.ResponseWriter, r *http.Request
 
 	cred, err := webauthn.VerifyRegistration(a.webauthnCfg, attestationObject, clientDataJSON, challenge)
 	if err != nil {
-		logError("webauthn/register", err)
+		logError("webauthn/register", err, clientIPFromRequest(r), "")
 		writeJSON(w, http.StatusBadRequest, errorResponse{"registration verification failed"})
 		return
 	}
@@ -279,7 +279,7 @@ func (a *apiHandler) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
 		a.webauthnCfg, authData, clientDataJSON, sig, cred.PublicKey, challenge,
 	)
 	if err != nil {
-		logError("webauthn/login", err)
+		logError("webauthn/login", err, clientIPFromRequest(r), "")
 		writeJSON(w, http.StatusUnauthorized, errorResponse{"authentication failed"})
 		return
 	}

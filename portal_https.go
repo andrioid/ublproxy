@@ -2,7 +2,7 @@ package main
 
 import (
 	"crypto/tls"
-	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -94,7 +94,7 @@ func (h *portalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func startPortalHTTPS(listenAddr string, host string, extraIPs []net.IP, certs *ca.Cache, handler *portalHandler) {
 	cert, err := certs.PortalCert(host, extraIPs...)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "portal: failed to generate TLS cert: %v\n", err)
+		slog.Error("portal: failed to generate TLS cert", "err", err)
 		os.Exit(1)
 	}
 
@@ -111,10 +111,10 @@ func startPortalHTTPS(listenAddr string, host string, extraIPs []net.IP, certs *
 		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 	}
 
-	fmt.Fprintf(os.Stderr, "ublproxy proxy+portal listening on https://%s\n", listenAddr)
+	slog.Info("ublproxy proxy+portal listening", "url", "https://"+listenAddr)
 
 	if err := server.ListenAndServeTLS("", ""); err != nil {
-		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
+		slog.Error("server error", "err", err)
 		os.Exit(1)
 	}
 }

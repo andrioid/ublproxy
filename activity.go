@@ -20,6 +20,8 @@ type ActivityEntry struct {
 	Host      string    `json:"host"`
 	URL       string    `json:"url,omitempty"`
 	Rule      string    `json:"rule,omitempty"`
+	IP        string    `json:"ip"`
+	User      string    `json:"user"`
 }
 
 // ActivityLog is a thread-safe ring buffer of recent proxy events.

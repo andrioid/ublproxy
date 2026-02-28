@@ -474,6 +474,12 @@ kbd {
   margin-top: 0.15rem;
 }
 
+.activity-meta {
+  color: var(--color-text-faint);
+  font-size: 0.72rem;
+  margin-top: 0.15rem;
+}
+
 /* Filter bar */
 .filter-bar {
   display: flex;

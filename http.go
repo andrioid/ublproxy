@@ -35,8 +35,10 @@ var hopByHopHeaders = []string{
 func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := matchContextFromRequest(r)
 	clientIP := clientIPFromRequest(r)
+	credID := p.credentialForIP(clientIP)
 	if p.shouldBlock(clientIP, r.URL.String(), ctx) {
-		p.logActivity(ActivityBlocked, r.URL.Hostname(), r.URL.String(), "")
+		p.logActivity(ActivityBlocked, r.URL.Hostname(), r.URL.String(), "", clientIP, credID)
+		logBlocked(r.URL.Hostname(), r.URL.String(), "", clientIP, credID)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -51,7 +53,7 @@ func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	outReq, err := http.NewRequestWithContext(r.Context(), r.Method, r.URL.String(), r.Body)
 	if err != nil {
-		logError("http/new-request", err)
+		logError("http/new-request", err, clientIP, credID)
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -61,7 +63,7 @@ func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := p.transport.RoundTrip(outReq)
 	if err != nil {
-		logError("http/roundtrip", err)
+		logError("http/roundtrip", err, clientIP, credID)
 		http.Error(w, "upstream error", http.StatusBadGateway)
 		return
 	}
@@ -72,13 +74,13 @@ func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// bootstrap script injection to avoid leaking the session token.
 	insecure := r.TLS == nil
 	if r.Method != http.MethodHead {
-		if modified, ok := p.applyElementHiding(resp, r.URL.Hostname(), clientIPFromRequest(r), insecure); ok {
+		if modified, ok := p.applyElementHiding(resp, r.URL.Hostname(), clientIP, insecure); ok {
 			copyHeaders(w.Header(), resp.Header)
 			removeHopByHopHeaders(w.Header())
 			w.Header().Del("Content-Length")
 			w.WriteHeader(resp.StatusCode)
 			w.Write(modified)
-			logRequest(r.Method, r.URL.String(), resp.StatusCode, time.Since(start))
+			logRequest(r.Method, r.URL.String(), resp.StatusCode, time.Since(start), clientIP, credID)
 			return
 		}
 	}
@@ -88,7 +90,7 @@ func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 
-	logRequest(r.Method, r.URL.String(), resp.StatusCode, time.Since(start))
+	logRequest(r.Method, r.URL.String(), resp.StatusCode, time.Since(start), clientIP, credID)
 }
 
 // handleHTTPUpgrade handles WebSocket and other protocol upgrade requests
@@ -96,9 +98,12 @@ func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 // the upstream, and if the upstream responds with 101, hijacks both sides
 // and does bidirectional copy.
 func (p *proxyHandler) handleHTTPUpgrade(w http.ResponseWriter, r *http.Request) {
+	clientIP := clientIPFromRequest(r)
+	credID := p.credentialForIP(clientIP)
+
 	outReq, err := http.NewRequestWithContext(r.Context(), r.Method, r.URL.String(), r.Body)
 	if err != nil {
-		logError("http/upgrade/new-request", err)
+		logError("http/upgrade/new-request", err, clientIP, credID)
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -112,7 +117,7 @@ func (p *proxyHandler) handleHTTPUpgrade(w http.ResponseWriter, r *http.Request)
 
 	resp, err := p.transport.RoundTrip(outReq)
 	if err != nil {
-		logError("http/upgrade/roundtrip", err)
+		logError("http/upgrade/roundtrip", err, clientIP, credID)
 		http.Error(w, "upstream error", http.StatusBadGateway)
 		return
 	}
@@ -145,7 +150,7 @@ func (p *proxyHandler) handleHTTPUpgrade(w http.ResponseWriter, r *http.Request)
 
 	clientConn, clientBuf, err := hijacker.Hijack()
 	if err != nil {
-		logError("http/upgrade/hijack", err)
+		logError("http/upgrade/hijack", err, clientIP, credID)
 		return
 	}
 	defer clientConn.Close()

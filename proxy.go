@@ -4,8 +4,8 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -91,18 +91,18 @@ func (p *proxyHandler) loadUserRules(credentialID string) *blocklist.RuleSet {
 
 	subURLs, err := p.store.ListEnabledSubscriptionURLs(credentialID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "user-rules: failed to load subscriptions for %s: %v\n", credentialID, err)
+		slog.Warn("user-rules: failed to load subscriptions", "user", shortUserID(credentialID), "err", err)
 	} else {
 		for _, url := range subURLs {
 			if err := p.loadBlocklistSource(rs, url); err != nil {
-				fmt.Fprintf(os.Stderr, "user-rules: failed to load subscription %s: %v\n", url, err)
+				slog.Warn("user-rules: failed to load subscription", "url", url, "err", err)
 			}
 		}
 	}
 
 	dbRules, err := p.store.ListEnabledRules(credentialID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "user-rules: failed to load rules for %s: %v\n", credentialID, err)
+		slog.Warn("user-rules: failed to load rules", "user", shortUserID(credentialID), "err", err)
 	} else {
 		for _, r := range dbRules {
 			rs.AddLine(r.Rule)
@@ -215,13 +215,13 @@ func (p *proxyHandler) reloadBaseline() {
 	// Load static blocklists (CLI --blocklist flags)
 	for _, src := range p.blocklistSources {
 		if err := p.loadBlocklistSource(rs, src); err != nil {
-			fmt.Fprintf(os.Stderr, "baseline: failed to load blocklist %s: %v\n", src, err)
+			slog.Warn("baseline: failed to load blocklist", "source", src, "err", err)
 		}
 	}
 
 	p.baselineRules.Store(rs)
 	if rs.HostCount() > 0 || rs.RuleCount() > 0 {
-		fmt.Fprintf(os.Stderr, "baseline: loaded %d hostnames, %d URL rules\n", rs.HostCount(), rs.RuleCount())
+		slog.Info("baseline loaded", "hostnames", rs.HostCount(), "rules", rs.RuleCount())
 	}
 }
 
@@ -252,7 +252,7 @@ func (p *proxyHandler) loadBlocklistURL(rs *blocklist.RuleSet, url string) error
 		if p.store != nil {
 			cached, cacheErr := p.store.GetCachedBlocklist(url)
 			if cacheErr == nil && cached != nil {
-				fmt.Fprintf(os.Stderr, "reload: using stale cache for %s (download failed: %v)\n", url, err)
+				slog.Warn("reload: using stale cache", "url", url, "err", err)
 				return rs.LoadReader(strings.NewReader(string(cached.Content)))
 			}
 		}
@@ -262,7 +262,7 @@ func (p *proxyHandler) loadBlocklistURL(rs *blocklist.RuleSet, url string) error
 	// Save to cache
 	if p.store != nil {
 		if cacheErr := p.store.SetCachedBlocklist(url, content); cacheErr != nil {
-			fmt.Fprintf(os.Stderr, "reload: failed to cache %s: %v\n", url, cacheErr)
+			slog.Warn("reload: failed to cache", "url", url, "err", cacheErr)
 		}
 	}
 
@@ -290,7 +290,7 @@ func downloadBlocklist(url string) ([]byte, error) {
 }
 
 // logActivity records a proxy event to the activity log if available.
-func (p *proxyHandler) logActivity(entryType, host, url, rule string) {
+func (p *proxyHandler) logActivity(entryType, host, url, rule, clientIP, credentialID string) {
 	if p.activityLog == nil {
 		return
 	}
@@ -299,6 +299,8 @@ func (p *proxyHandler) logActivity(entryType, host, url, rule string) {
 		Host: host,
 		URL:  url,
 		Rule: rule,
+		IP:   clientIP,
+		User: shortUserID(credentialID),
 	})
 }
 

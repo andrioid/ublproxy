@@ -438,3 +438,4 @@ All flags can also be set via environment variables. Environment variables take 
 | `--db` | `UBLPROXY_DB` | `~/.ublproxy/ublproxy.db` | Path to SQLite database |
 | `--blocklist` | `UBLPROXY_BLOCKLIST` | *(none)* | Path or URL to a blocklist file (repeatable, comma-separated in env var) |
 | `--transparent` | `UBLPROXY_TRANSPARENT` | `false` | Run in transparent proxy mode (intercept redirected traffic) |
+| `--log-level` | `UBLPROXY_LOG_LEVEL` | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. Use `debug` to log all proxied requests. |

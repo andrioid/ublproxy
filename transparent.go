@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -290,10 +291,12 @@ func (h *transparentHTTPHandler) servePortal(w http.ResponseWriter, r *http.Requ
 func (h *transparentHTTPHandler) forwardHTTP(w http.ResponseWriter, r *http.Request, host string) {
 	targetURL := "http://" + host + r.URL.RequestURI()
 	clientIP := clientIPFromRequest(r)
+	credID := h.proxy.credentialForIP(clientIP)
 
 	ctx := matchContextFromRequest(r)
 	if h.proxy.shouldBlock(clientIP, targetURL, ctx) {
-		h.proxy.logActivity(ActivityBlocked, host, targetURL, "")
+		h.proxy.logActivity(ActivityBlocked, host, targetURL, "", clientIP, credID)
+		logBlocked(host, targetURL, "", clientIP, credID)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -308,7 +311,7 @@ func (h *transparentHTTPHandler) forwardHTTP(w http.ResponseWriter, r *http.Requ
 
 	outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
 	if err != nil {
-		logError("transparent-http/new-request", err)
+		logError("transparent-http/new-request", err, clientIP, credID)
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -318,7 +321,7 @@ func (h *transparentHTTPHandler) forwardHTTP(w http.ResponseWriter, r *http.Requ
 
 	resp, err := h.proxy.transport.RoundTrip(outReq)
 	if err != nil {
-		logError("transparent-http/roundtrip", err)
+		logError("transparent-http/roundtrip", err, clientIP, credID)
 		http.Error(w, "upstream error", http.StatusBadGateway)
 		return
 	}
@@ -332,7 +335,7 @@ func (h *transparentHTTPHandler) forwardHTTP(w http.ResponseWriter, r *http.Requ
 			w.Header().Del("Content-Length")
 			w.WriteHeader(resp.StatusCode)
 			w.Write(modified)
-			logRequest(r.Method, targetURL, resp.StatusCode, time.Since(start))
+			logRequest(r.Method, targetURL, resp.StatusCode, time.Since(start), clientIP, credID)
 			return
 		}
 	}
@@ -342,16 +345,19 @@ func (h *transparentHTTPHandler) forwardHTTP(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 
-	logRequest(r.Method, targetURL, resp.StatusCode, time.Since(start))
+	logRequest(r.Method, targetURL, resp.StatusCode, time.Since(start), clientIP, credID)
 }
 
 // forwardHTTPUpgrade handles WebSocket and other protocol upgrade requests
 // in transparent HTTP mode. It mirrors proxyHandler.handleHTTPUpgrade but
 // builds the target URL from the Host header.
 func (h *transparentHTTPHandler) forwardHTTPUpgrade(w http.ResponseWriter, r *http.Request, targetURL string) {
+	clientIP := clientIPFromRequest(r)
+	credID := h.proxy.credentialForIP(clientIP)
+
 	outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
 	if err != nil {
-		logError("transparent-http/upgrade/new-request", err)
+		logError("transparent-http/upgrade/new-request", err, clientIP, credID)
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -365,7 +371,7 @@ func (h *transparentHTTPHandler) forwardHTTPUpgrade(w http.ResponseWriter, r *ht
 
 	resp, err := h.proxy.transport.RoundTrip(outReq)
 	if err != nil {
-		logError("transparent-http/upgrade/roundtrip", err)
+		logError("transparent-http/upgrade/roundtrip", err, clientIP, credID)
 		http.Error(w, "upstream error", http.StatusBadGateway)
 		return
 	}
@@ -395,7 +401,7 @@ func (h *transparentHTTPHandler) forwardHTTPUpgrade(w http.ResponseWriter, r *ht
 
 	clientConn, clientBuf, err := hijacker.Hijack()
 	if err != nil {
-		logError("transparent-http/upgrade/hijack", err)
+		logError("transparent-http/upgrade/hijack", err, clientIP, credID)
 		return
 	}
 	defer clientConn.Close()
@@ -421,7 +427,7 @@ func serveTransparentTLS(ln net.Listener, proxy *proxyHandler, certs *ca.Cache, 
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
-			logError("transparent-tls/accept", err)
+			logError("transparent-tls/accept", err, "", "")
 			continue
 		}
 		go handleTransparentTLSConn(conn, proxy, certs, portalHost, portalIPs, trustTracker)
@@ -433,42 +439,45 @@ func handleTransparentTLSConn(conn net.Conn, proxy *proxyHandler, certs *ca.Cach
 
 	conn.SetDeadline(time.Now().Add(10 * time.Second))
 
+	clientIP, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+
 	br := bufio.NewReader(conn)
 	sni, err := extractSNI(br)
 	if err != nil {
-		logError("transparent-tls/sni", err)
+		logError("transparent-tls/sni", err, clientIP, "")
 		return
 	}
 
 	if sni == "" {
-		logError("transparent-tls/sni", errors.New("no SNI in ClientHello"))
+		logError("transparent-tls/sni", errors.New("no SNI in ClientHello"), clientIP, "")
 		return
 	}
 
-	clientIP, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+	credID := proxy.credentialForIP(clientIP)
 
 	// Portal access: serve the management portal when client connects
 	// to the proxy's own hostname or IP
 	if sni == portalHost || isPortalIP(sni, portalIPs) {
-		handleTransparentPortalTLS(conn, br, proxy, certs, portalHost, portalIPs)
+		handleTransparentPortalTLS(conn, br, proxy, certs, portalHost, portalIPs, clientIP)
 		return
 	}
 
 	// Blocked host: close connection
 	if proxy.shouldBlockHost(clientIP, sni) {
-		proxy.logActivity(ActivityBlocked, sni, "", "||"+sni+"^")
+		proxy.logActivity(ActivityBlocked, sni, "", "||"+sni+"^", clientIP, credID)
+		logBlocked(sni, "", "||"+sni+"^", clientIP, credID)
 		return
 	}
 
 	// Passthrough: relay raw TCP to upstream
 	if proxy.isHostExcepted(clientIP, sni) {
-		proxy.logActivity(ActivityPassthrough, sni, "", "@@||"+sni+"^")
-		handleTransparentPassthrough(conn, br, sni)
+		proxy.logActivity(ActivityPassthrough, sni, "", "@@||"+sni+"^", clientIP, credID)
+		handleTransparentPassthrough(conn, br, sni, clientIP, credID)
 		return
 	}
 
 	// MITM: generate cert, complete TLS handshake, proxy requests
-	handleTransparentMITM(conn, br, proxy, certs, sni, clientIP, trustTracker)
+	handleTransparentMITM(conn, br, proxy, certs, sni, clientIP, credID, trustTracker)
 }
 
 func isPortalIP(sni string, portalIPs []net.IP) bool {
@@ -486,10 +495,10 @@ func isPortalIP(sni string, portalIPs []net.IP) bool {
 
 // handleTransparentPortalTLS completes a TLS handshake using the portal
 // certificate and serves the management portal over HTTPS.
-func handleTransparentPortalTLS(conn net.Conn, br *bufio.Reader, proxy *proxyHandler, certs *ca.Cache, portalHost string, portalIPs []net.IP) {
+func handleTransparentPortalTLS(conn net.Conn, br *bufio.Reader, proxy *proxyHandler, certs *ca.Cache, portalHost string, portalIPs []net.IP, clientIP string) {
 	cert, err := certs.PortalCert(portalHost, portalIPs...)
 	if err != nil {
-		logError("transparent-tls/portal-cert", err)
+		logError("transparent-tls/portal-cert", err, clientIP, "")
 		return
 	}
 
@@ -500,7 +509,7 @@ func handleTransparentPortalTLS(conn net.Conn, br *bufio.Reader, proxy *proxyHan
 		Certificates: []tls.Certificate{*cert},
 	})
 	if err := tlsConn.Handshake(); err != nil {
-		logError("transparent-tls/portal-handshake", err)
+		logError("transparent-tls/portal-handshake", err, clientIP, "")
 		return
 	}
 	defer tlsConn.Close()
@@ -523,17 +532,17 @@ func handleTransparentPortalTLS(conn net.Conn, br *bufio.Reader, proxy *proxyHan
 // handleTransparentPassthrough relays raw TCP bytes between the client
 // and the upstream server. The peeked ClientHello bytes are forwarded
 // to upstream so the TLS handshake completes end-to-end.
-func handleTransparentPassthrough(conn net.Conn, br *bufio.Reader, sni string) {
+func handleTransparentPassthrough(conn net.Conn, br *bufio.Reader, sni, clientIP, credID string) {
 	upstream, err := net.DialTimeout("tcp", net.JoinHostPort(sni, "443"), 10*time.Second)
 	if err != nil {
-		logError("transparent-tls/passthrough-dial", err)
+		logError("transparent-tls/passthrough-dial", err, clientIP, credID)
 		return
 	}
 	defer upstream.Close()
 
 	conn.SetDeadline(time.Time{})
 
-	logPassthrough(sni)
+	logPassthrough(sni, clientIP, credID)
 
 	// Replay buffered bytes + remaining connection data to upstream
 	replayReader := &readerWriter{r: br, w: conn}
@@ -543,10 +552,10 @@ func handleTransparentPassthrough(conn net.Conn, br *bufio.Reader, sni string) {
 // handleTransparentMITM generates a MITM certificate for the SNI hostname,
 // completes a TLS handshake with the client, then proxies HTTP requests
 // inside the tunnel to the upstream server.
-func handleTransparentMITM(conn net.Conn, br *bufio.Reader, proxy *proxyHandler, certs *ca.Cache, sni, clientIP string, trustTracker *caTrustTracker) {
+func handleTransparentMITM(conn net.Conn, br *bufio.Reader, proxy *proxyHandler, certs *ca.Cache, sni, clientIP, credID string, trustTracker *caTrustTracker) {
 	tlsCert, err := certs.GetCert(sni)
 	if err != nil {
-		logError("transparent-tls/cert", err)
+		logError("transparent-tls/cert", err, clientIP, credID)
 		return
 	}
 
@@ -558,7 +567,7 @@ func handleTransparentMITM(conn net.Conn, br *bufio.Reader, proxy *proxyHandler,
 	})
 	if err := tlsConn.Handshake(); err != nil {
 		// Client doesn't trust our CA — this is expected for unconfigured clients
-		logError("transparent-tls/client-tls", err)
+		logError("transparent-tls/client-tls", err, clientIP, credID)
 		return
 	}
 	defer tlsConn.Close()
@@ -569,7 +578,7 @@ func handleTransparentMITM(conn net.Conn, br *bufio.Reader, proxy *proxyHandler,
 	conn.SetDeadline(time.Time{})
 
 	// Proxy HTTP requests inside the TLS tunnel
-	proxy.proxyTLSRequests(tlsConn, sni, "443", clientIP, false)
+	proxy.proxyTLSRequests(tlsConn, sni, "443", clientIP, credID, false)
 }
 
 // replayConn wraps a net.Conn with a bufio.Reader that may have buffered
@@ -633,10 +642,10 @@ func startTransparentHTTP(listenAddr string, proxy *proxyHandler, trustTracker *
 		portalHost:   portalHost,
 	}
 
-	fmt.Fprintf(os.Stderr, "ublproxy transparent HTTP on http://%s\n", listenAddr)
+	slog.Info("ublproxy transparent HTTP", "url", "http://"+listenAddr)
 
 	if err := http.ListenAndServe(listenAddr, handler); err != nil {
-		fmt.Fprintf(os.Stderr, "transparent HTTP error: %v\n", err)
+		slog.Error("transparent HTTP error", "err", err)
 		os.Exit(1)
 	}
 }
@@ -646,11 +655,11 @@ func startTransparentHTTP(listenAddr string, proxy *proxyHandler, trustTracker *
 func startTransparentHTTPS(listenAddr string, proxy *proxyHandler, certs *ca.Cache, portalHost string, portalIPs []net.IP, trustTracker *caTrustTracker) {
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "transparent HTTPS listen error: %v\n", err)
+		slog.Error("transparent HTTPS listen error", "err", err)
 		os.Exit(1)
 	}
 
-	fmt.Fprintf(os.Stderr, "ublproxy transparent HTTPS on %s\n", listenAddr)
+	slog.Info("ublproxy transparent HTTPS", "addr", listenAddr)
 
 	serveTransparentTLS(ln, proxy, certs, portalHost, portalIPs, trustTracker)
 }

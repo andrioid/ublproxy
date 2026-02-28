@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -80,6 +81,12 @@ func main() {
 				Usage:   "run in transparent proxy mode (intercept redirected traffic instead of explicit proxy)",
 				Sources: cli.EnvVars("UBLPROXY_TRANSPARENT"),
 			},
+			&cli.StringFlag{
+				Name:    "log-level",
+				Value:   "info",
+				Usage:   "log verbosity level (debug, info, warn, error)",
+				Sources: cli.EnvVars("UBLPROXY_LOG_LEVEL"),
+			},
 		},
 		Action: run,
 	}
@@ -91,6 +98,8 @@ func main() {
 }
 
 func run(_ context.Context, cmd *cli.Command) error {
+	setupLogging(cmd.String("log-level"))
+
 	addr := cmd.String("addr")
 	httpPort := cmd.Int("http-port")
 	httpsPort := cmd.Int("https-port")
@@ -170,9 +179,9 @@ func runExplicitProxy(handler *proxyHandler, api *apiHandler, certs *ca.Cache, c
 		portalOrigin: portalOrigin,
 		httpOrigin:   httpOrigin,
 	}
-	fmt.Fprintf(os.Stderr, "ublproxy setup page on http://%s\n", httpAddr)
-	fmt.Fprintf(os.Stderr, "ublproxy mobile proxy on %s\n", httpOrigin)
-	fmt.Fprintf(os.Stderr, "ublproxy proxy+portal on %s\n", portalOrigin)
+	slog.Info("ublproxy setup page", "url", "http://"+httpAddr)
+	slog.Info("ublproxy mobile proxy", "url", httpOrigin)
+	slog.Info("ublproxy proxy+portal", "url", portalOrigin)
 
 	if err := http.ListenAndServe(httpAddr, setupH); err != nil {
 		return fmt.Errorf("server error: %w", err)
@@ -183,7 +192,7 @@ func runExplicitProxy(handler *proxyHandler, api *apiHandler, certs *ca.Cache, c
 func runTransparent(handler *proxyHandler, certs *ca.Cache, hostname string, extraIPs []net.IP, httpsAddr, httpAddr string) error {
 	trustTracker := newCATrustTracker()
 
-	fmt.Fprintf(os.Stderr, "ublproxy running in transparent proxy mode\n")
+	slog.Info("ublproxy running in transparent proxy mode")
 
 	go startTransparentHTTPS(httpsAddr, handler, certs, hostname, extraIPs, trustTracker)
 	startTransparentHTTP(httpAddr, handler, trustTracker, hostname)

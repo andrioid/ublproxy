@@ -18,8 +18,10 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 		port = "443"
 	}
 	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	credID := p.credentialForIP(clientIP)
 	if p.shouldBlockHost(clientIP, host) {
-		p.logActivity(ActivityBlocked, host, "", "||"+host+"^")
+		p.logActivity(ActivityBlocked, host, "", "||"+host+"^", clientIP, credID)
+		logBlocked(host, "", "||"+host+"^", clientIP, credID)
 		http.Error(w, "blocked", http.StatusForbidden)
 		return
 	}
@@ -28,8 +30,8 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// The proxy never sees the plaintext — the client's TLS session
 	// goes straight to the upstream server.
 	if p.isHostExcepted(clientIP, host) {
-		p.logActivity(ActivityPassthrough, host, "", "@@||"+host+"^")
-		p.tunnelPassthrough(w, r, host, port)
+		p.logActivity(ActivityPassthrough, host, "", "@@||"+host+"^", clientIP, credID)
+		p.tunnelPassthrough(w, r, host, port, clientIP, credID)
 		return
 	}
 
@@ -44,14 +46,14 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
-		logError("connect/hijack", err)
+		logError("connect/hijack", err, clientIP, credID)
 		return
 	}
 	defer clientConn.Close()
 
 	tlsCert, err := p.certs.GetCert(host)
 	if err != nil {
-		logError("connect/cert", err)
+		logError("connect/cert", err, clientIP, credID)
 		return
 	}
 
@@ -62,7 +64,7 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 		Certificates: []tls.Certificate{*tlsCert},
 	})
 	if err := tlsClientConn.Handshake(); err != nil {
-		logError("connect/client-tls", err)
+		logError("connect/client-tls", err, clientIP, credID)
 		return
 	}
 	defer tlsClientConn.Close()
@@ -70,21 +72,19 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Clear the deadline after successful handshake
 	clientConn.SetDeadline(time.Time{})
 
-	// Extract client IP for script injection (from the original CONNECT request).
 	// If the outer connection is plain HTTP (r.TLS == nil), mark as insecure
 	// so the bootstrap script (which contains the session token) is not injected.
-	cIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 	insecure := r.TLS == nil
-	p.proxyTLSRequests(tlsClientConn, host, port, cIP, insecure)
+	p.proxyTLSRequests(tlsClientConn, host, port, clientIP, credID, insecure)
 }
 
 // tunnelPassthrough establishes a transparent TCP tunnel between the client
 // and upstream server. No MITM, no cert generation, no request inspection.
 // The proxy only sees connection metadata (hostname, timing, bytes transferred).
-func (p *proxyHandler) tunnelPassthrough(w http.ResponseWriter, r *http.Request, host, port string) {
+func (p *proxyHandler) tunnelPassthrough(w http.ResponseWriter, r *http.Request, host, port, clientIP, credID string) {
 	upstream, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), 10*time.Second)
 	if err != nil {
-		logError("passthrough/dial", err)
+		logError("passthrough/dial", err, clientIP, credID)
 		http.Error(w, "upstream unreachable", http.StatusBadGateway)
 		return
 	}
@@ -100,12 +100,12 @@ func (p *proxyHandler) tunnelPassthrough(w http.ResponseWriter, r *http.Request,
 
 	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
-		logError("passthrough/hijack", err)
+		logError("passthrough/hijack", err, clientIP, credID)
 		return
 	}
 	defer clientConn.Close()
 
-	logPassthrough(host)
+	logPassthrough(host, clientIP, credID)
 	bidirectionalCopy(clientConn, upstream)
 }
 
@@ -114,14 +114,14 @@ func (p *proxyHandler) tunnelPassthrough(w http.ResponseWriter, r *http.Request,
 // by looping until the client closes the connection or an error occurs.
 // When insecure is true the outer proxy connection is plain HTTP, so the
 // bootstrap script (which embeds the session token) is not injected.
-func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port, clientIP string, insecure bool) {
+func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port, clientIP, credID string, insecure bool) {
 	clientReader := bufio.NewReader(clientTLS)
 
 	for {
 		req, err := http.ReadRequest(clientReader)
 		if err != nil {
 			if err != io.EOF {
-				logError("connect/read-request", err)
+				logError("connect/read-request", err, clientIP, credID)
 			}
 			return
 		}
@@ -132,7 +132,8 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port, clientI
 		// checked at CONNECT time; this catches path-specific rules)
 		ctx := matchContextFromRequest(req)
 		if p.shouldBlock(clientIP, targetURL, ctx) {
-			p.logActivity(ActivityBlocked, host, targetURL, "")
+			p.logActivity(ActivityBlocked, host, targetURL, "", clientIP, credID)
+			logBlocked(host, targetURL, "", clientIP, credID)
 			req.Body.Close()
 			blocked := &http.Response{
 				StatusCode: http.StatusNoContent,
@@ -161,7 +162,7 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port, clientI
 
 		resp, err := p.transport.RoundTrip(req)
 		if err != nil {
-			logError("connect/roundtrip", err)
+			logError("connect/roundtrip", err, clientIP, credID)
 			return
 		}
 
@@ -170,7 +171,7 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port, clientI
 			upstreamConn, ok := resp.Body.(io.ReadWriteCloser)
 			if !ok {
 				resp.Body.Close()
-				logError("connect/upgrade", io.ErrUnexpectedEOF)
+				logError("connect/upgrade", io.ErrUnexpectedEOF, clientIP, credID)
 				return
 			}
 			defer upstreamConn.Close()
@@ -178,7 +179,7 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port, clientI
 			resp.Body = nil
 			resp.Write(clientTLS)
 
-			logRequest(req.Method, targetURL+" [websocket]", resp.StatusCode, time.Since(start))
+			logRequest(req.Method, targetURL+" [websocket]", resp.StatusCode, time.Since(start), clientIP, credID)
 
 			// clientReader may have buffered bytes past the HTTP request,
 			// so we read from it (not raw clientTLS). Writes go to clientTLS.
@@ -198,12 +199,12 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port, clientI
 
 		if err := resp.Write(clientTLS); err != nil {
 			resp.Body.Close()
-			logError("connect/write-response", err)
+			logError("connect/write-response", err, clientIP, credID)
 			return
 		}
 		resp.Body.Close()
 
-		logRequest(req.Method, targetURL, resp.StatusCode, time.Since(start))
+		logRequest(req.Method, targetURL, resp.StatusCode, time.Since(start), clientIP, credID)
 
 		if resp.Close {
 			return

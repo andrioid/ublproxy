@@ -1,9 +1,8 @@
 package main
 
 import (
-	"fmt"
+	"log/slog"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 
@@ -139,7 +138,7 @@ func (a *apiHandler) triggerReload(credentialID string) {
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Fprintf(os.Stderr, "panic in onRulesChanged: %v\n", r)
+					slog.Error("panic in onRulesChanged", "err", r)
 				}
 			}()
 			a.onRulesChanged(credentialID)

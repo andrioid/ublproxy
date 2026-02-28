@@ -108,6 +108,11 @@
         detail.appendChild(ruleEl);
       }
 
+      var meta = document.createElement('div');
+      meta.className = 'activity-meta';
+      meta.textContent = entry.ip + (entry.user ? ' \u00b7 ' + entry.user : '');
+      detail.appendChild(meta);
+
       li.appendChild(time);
       li.appendChild(badge);
       li.appendChild(detail);

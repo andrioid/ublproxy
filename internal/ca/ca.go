@@ -7,6 +7,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -44,8 +45,8 @@ func LoadOrGenerate(caDir string) (*x509.Certificate, *rsa.PrivateKey, error) {
 		return nil, nil, fmt.Errorf("failed to save CA: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Generated new CA certificate at %s\n", certPath)
-	fmt.Fprintf(os.Stderr, "Trust this certificate in your OS/browser to use HTTPS interception.\n")
+	slog.Info("generated new CA certificate", "path", certPath)
+	slog.Info("trust this certificate in your OS/browser to use HTTPS interception")
 
 	return cert, key, nil
 }
