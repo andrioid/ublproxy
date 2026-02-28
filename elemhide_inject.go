@@ -151,7 +151,7 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 		safeCSS := styleCloseRe.ReplaceAllString(css, `<\/style`)
 		styleTag := []byte("<style>" + safeCSS + "</style>")
 		modified = injectStyleTag(modified, styleTag)
-		rule := strings.Join(selectors, ", ")
+		rule := truncateRule(strings.Join(selectors, ", "), 80)
 		p.logActivity(ActivityElementHidden, host, "", rule, clientIP, credID)
 		logElementHidden(host, rule, clientIP, credID)
 	}

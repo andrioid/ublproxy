@@ -44,6 +44,14 @@ func shortUserID(credentialID string) string {
 	return credentialID
 }
 
+// truncateRule shortens a rule string to maxLen, appending "..." if truncated.
+func truncateRule(rule string, maxLen int) string {
+	if len(rule) <= maxLen {
+		return rule
+	}
+	return rule[:maxLen] + "..."
+}
+
 // logRequest logs a completed HTTP request at Debug level.
 // Only visible when --log-level=debug.
 func logRequest(method, url string, status int, duration time.Duration, clientIP, credentialID string) {
