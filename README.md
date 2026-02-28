@@ -148,6 +148,31 @@ It's important to be aware, that by using this solution, you're essentially decr
 - **Session-to-IP mapping**: Sessions are bound to client IP. Multiple users behind the same NAT IP share a single session slot (last login wins).
 - **Mobile proxy connection is unencrypted**: iOS and Android don't support HTTPS proxy connections. Mobile devices use a plain HTTP CONNECT proxy on port 8080. The CONNECT metadata (target hostname) is visible on the LAN, though the tunneled content is TLS-encrypted. The element picker is disabled on mobile connections to avoid leaking the session token.
 
+## Comparison with DNS-based blockers
+
+Solutions like [Pi-hole](https://pi-hole.net/) and [AdGuard Home](https://github.com/AdguardTeam/AdGuardHome) block ads at the DNS level by resolving ad-serving domains to a sinkhole address. ublproxy takes a different approach — it operates as an HTTPS proxy, intercepting and modifying traffic at the HTTP layer.
+
+### Advantages
+
+- **URL-path blocking**: DNS blockers can only block entire hostnames. ublproxy can block specific paths (e.g. `/ads/banner.js`) while allowing legitimate content from the same domain.
+- **Cosmetic filtering**: HTML responses are modified before reaching the browser — blocked resource elements are stripped and CSS is injected to hide ad containers. DNS blockers leave empty ad placeholders.
+- **Full Adblock Plus filter list compatibility**: Supports the same filter syntax used by browser extensions (element hiding, URL patterns, content-type options), not just domain lists.
+- **Resilient to anti-adblock**: Works against scripts that detect DNS-level blocking or missing ad resources, since responses are modified at the content level.
+- **Per-user rules**: Each user authenticates with a passkey and maintains their own rules and subscriptions, layered on top of server-wide blocklists.
+
+### Disadvantages
+
+- **CA certificate required**: Every device must trust the proxy's CA certificate. This adds setup friction and has security implications — the proxy can decrypt all HTTPS traffic.
+- **Certificate-pinned apps may break**: Some apps (banking, security) use certificate pinning and will reject the proxy's MITM certificates. These need passthrough rules (`@@||domain^`).
+- **Higher resource usage**: Decrypting, inspecting, and re-encrypting every HTTPS connection is more resource-intensive than responding to DNS queries.
+- **More complex setup**: Requires proxy configuration (PAC files or transparent mode with firewall rules) on top of CA certificate installation, compared to just changing a DNS server address.
+- **HTTP-only**: Does not block non-HTTP traffic. DNS blockers intercept all protocols (QUIC, raw TCP, etc.) at the domain level.
+- **Proxy-unaware apps**: Apps that ignore system proxy settings won't be filtered unless transparent mode with firewall rules is configured.
+
+### Complementary use
+
+These approaches aren't mutually exclusive. A DNS blocker can handle the bulk of known ad domains cheaply, while ublproxy handles the cases DNS blocking can't reach — same-origin ads, cosmetic filtering, and URL-path-specific rules.
+
 ## References
 
 - See [QUICK_START.md](QUICK_START.md) for setup instructions (local and Docker).
