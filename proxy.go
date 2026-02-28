@@ -11,12 +11,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"ublproxy/pkg/blocklist"
-	"ublproxy/pkg/store"
+	"ublproxy/internal/blocklist"
+	"ublproxy/internal/ca"
+	"ublproxy/internal/store"
 )
 
 type proxyHandler struct {
-	certs     *certCache
+	certs     *ca.Cache
 	caCertPEM []byte
 	transport *http.Transport
 	store     *store.Store
@@ -47,7 +48,7 @@ type proxyHandler struct {
 	reloadMu sync.Mutex
 }
 
-func newProxyHandler(certs *certCache, caCertPEM []byte) *proxyHandler {
+func newProxyHandler(certs *ca.Cache, caCertPEM []byte) *proxyHandler {
 	return &proxyHandler{
 		certs:     certs,
 		caCertPEM: caCertPEM,

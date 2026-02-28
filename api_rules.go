@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"ublproxy/pkg/store"
+	"ublproxy/internal/store"
 )
 
 func (a *apiHandler) routeRules(w http.ResponseWriter, r *http.Request, path string, sess *store.Session) {

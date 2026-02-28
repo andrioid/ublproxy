@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+
+	"ublproxy/internal/ca"
 )
 
 // portalHandler routes requests on the HTTPS port. It serves the proxy
@@ -85,8 +87,8 @@ func (h *portalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // startPortalHTTPS starts the HTTPS server that handles both proxy
 // traffic and the management portal. HTTP/2 is disabled because
 // CONNECT tunnels require Hijack which only works with HTTP/1.1.
-func startPortalHTTPS(listenAddr string, host string, extraIPs []net.IP, certs *certCache, handler *portalHandler) {
-	cert, err := certs.portalCert(host, extraIPs...)
+func startPortalHTTPS(listenAddr string, host string, extraIPs []net.IP, certs *ca.Cache, handler *portalHandler) {
+	cert, err := certs.PortalCert(host, extraIPs...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "portal: failed to generate TLS cert: %v\n", err)
 		os.Exit(1)

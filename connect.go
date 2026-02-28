@@ -49,7 +49,7 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	defer clientConn.Close()
 
-	tlsCert, err := p.certs.getCert(host)
+	tlsCert, err := p.certs.GetCert(host)
 	if err != nil {
 		logError("connect/cert", err)
 		return

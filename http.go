@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"time"
 
-	"ublproxy/pkg/blocklist"
+	"ublproxy/internal/blocklist"
 )
 
 // clientIPFromRequest extracts the IP address from the request's RemoteAddr.

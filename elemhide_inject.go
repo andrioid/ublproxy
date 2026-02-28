@@ -12,7 +12,7 @@ import (
 	"github.com/andybalholm/brotli"
 	"golang.org/x/net/html"
 
-	"ublproxy/pkg/blocklist"
+	"ublproxy/internal/blocklist"
 )
 
 // styleCloseRe matches </style in any case — used to prevent XSS via

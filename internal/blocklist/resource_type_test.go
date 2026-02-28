@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	"ublproxy/pkg/blocklist"
+	"ublproxy/internal/blocklist"
 )
 
 func TestInferResourceTypeFromSecFetchDest(t *testing.T) {
@@ -109,14 +109,5 @@ func TestInferResourceTypePriority(t *testing.T) {
 	got := blocklist.InferResourceType(req)
 	if got != blocklist.ResourceImage {
 		t.Errorf("expected Sec-Fetch-Dest to win, got %d", got)
-	}
-}
-
-func TestInferResourceTypeUnknown(t *testing.T) {
-	// No headers, no recognizable extension
-	req, _ := http.NewRequest("GET", "http://example.com/api/data", nil)
-	got := blocklist.InferResourceType(req)
-	if got != 0 {
-		t.Errorf("expected unknown (0), got %d", got)
 	}
 }

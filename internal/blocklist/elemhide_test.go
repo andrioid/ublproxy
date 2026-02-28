@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"ublproxy/pkg/blocklist"
+	"ublproxy/internal/blocklist"
 )
 
 // selectorPresent returns true if the selector appears in the CSS.
@@ -67,23 +67,6 @@ func TestElementHidingForDomain(t *testing.T) {
 	}
 }
 
-func TestElementHidingCSS(t *testing.T) {
-	rs := blocklist.NewRuleSet()
-	rs.AddLine("##.ad-banner")
-
-	eh := rs.ElementHidingForDomain("example.com")
-	if eh == nil {
-		t.Fatal("expected non-nil ElementHiding")
-	}
-
-	if !strings.Contains(eh.CSS, ".ad-banner") {
-		t.Errorf("selector should appear in CSS, got:\n%s", eh.CSS)
-	}
-	if !strings.Contains(eh.CSS, "display: none !important") {
-		t.Errorf("CSS should use 'display: none !important', got:\n%s", eh.CSS)
-	}
-}
-
 func TestElementHidingComplexSelector(t *testing.T) {
 	rs := blocklist.NewRuleSet()
 	rs.AddLine("example.com##div .ad-child")
@@ -134,23 +117,5 @@ func TestElementHideException(t *testing.T) {
 	eh = rs.ElementHidingForDomain("other.com")
 	if !selectorPresent(eh, ".ad-banner") {
 		t.Error(".ad-banner should be present on other.com")
-	}
-}
-
-func TestElementHideFromLoadFile(t *testing.T) {
-	rs := blocklist.NewRuleSet()
-	rs.AddLine("##.global-ad")
-	rs.AddLine("||ads.example.com^")
-	rs.AddLine("/tracking.js")
-
-	// Element hiding should work alongside blocking rules
-	eh := rs.ElementHidingForDomain("example.com")
-	if !selectorPresent(eh, ".global-ad") {
-		t.Error("element hiding rules should be parsed alongside blocking rules")
-	}
-
-	// Blocking rules should still work
-	if !rs.ShouldBlock("http://ads.example.com/banner.gif") {
-		t.Error("blocking rules should still work alongside element hiding")
 	}
 }

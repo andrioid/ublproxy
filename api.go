@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"ublproxy/pkg/store"
-	"ublproxy/pkg/webauthn"
+	"ublproxy/internal/store"
+	"ublproxy/internal/webauthn"
 )
 
 const (

@@ -17,8 +17,8 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 
-	"ublproxy/pkg/store"
-	"ublproxy/pkg/webauthn"
+	"ublproxy/internal/store"
+	"ublproxy/internal/webauthn"
 )
 
 var testAPIConfig = webauthn.Config{

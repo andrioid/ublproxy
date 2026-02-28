@@ -1,4 +1,4 @@
-package main
+package ca
 
 import (
 	"crypto/rand"
@@ -12,22 +12,23 @@ import (
 	"time"
 )
 
-type certCache struct {
-	mu     sync.RWMutex
-	certs  map[string]*tls.Certificate
-	caCert *x509.Certificate
+type Cache struct {
+	mu    sync.RWMutex
+	certs map[string]*tls.Certificate
+
+	CACert *x509.Certificate
 	caKey  *rsa.PrivateKey
 }
 
-func newCertCache(caCert *x509.Certificate, caKey *rsa.PrivateKey) *certCache {
-	return &certCache{
+func NewCache(caCert *x509.Certificate, caKey *rsa.PrivateKey) *Cache {
+	return &Cache{
 		certs:  make(map[string]*tls.Certificate),
-		caCert: caCert,
+		CACert: caCert,
 		caKey:  caKey,
 	}
 }
 
-func (c *certCache) getCert(host string) (*tls.Certificate, error) {
+func (c *Cache) GetCert(host string) (*tls.Certificate, error) {
 	c.mu.RLock()
 	if cert, ok := c.certs[host]; ok {
 		c.mu.RUnlock()
@@ -35,7 +36,7 @@ func (c *certCache) getCert(host string) (*tls.Certificate, error) {
 	}
 	c.mu.RUnlock()
 
-	cert, err := generateCert(host, c.caCert, c.caKey)
+	cert, err := generateCert(host, c.CACert, c.caKey)
 	if err != nil {
 		return nil, err
 	}
@@ -47,11 +48,11 @@ func (c *certCache) getCert(host string) (*tls.Certificate, error) {
 	return cert, nil
 }
 
-// portalCert generates a TLS certificate for the portal that covers the
+// PortalCert generates a TLS certificate for the portal that covers the
 // given hostname, localhost, 127.0.0.1, and any additional IPs (e.g. the
 // LAN IP). This allows access via hostname, localhost, or direct IP
 // without TLS errors.
-func (c *certCache) portalCert(host string, extraIPs ...net.IP) (*tls.Certificate, error) {
+func (c *Cache) PortalCert(host string, extraIPs ...net.IP) (*tls.Certificate, error) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, err
@@ -96,7 +97,7 @@ func (c *certCache) portalCert(host string, extraIPs ...net.IP) (*tls.Certificat
 		}
 	}
 
-	certDER, err := x509.CreateCertificate(rand.Reader, template, c.caCert, &key.PublicKey, c.caKey)
+	certDER, err := x509.CreateCertificate(rand.Reader, template, c.CACert, &key.PublicKey, c.caKey)
 	if err != nil {
 		return nil, err
 	}

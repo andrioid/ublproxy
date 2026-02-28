@@ -1,4 +1,4 @@
-package main
+package ca
 
 import (
 	"crypto/rand"
@@ -14,15 +14,15 @@ import (
 )
 
 const (
-	caCertFilename = "ca.crt"
-	caKeyFilename  = "ca.key"
+	certFilename = "ca.crt"
+	keyFilename  = "ca.key"
 )
 
-func loadOrGenerateCA(caDir string) (*x509.Certificate, *rsa.PrivateKey, error) {
-	certPath := filepath.Join(caDir, caCertFilename)
-	keyPath := filepath.Join(caDir, caKeyFilename)
+func LoadOrGenerate(caDir string) (*x509.Certificate, *rsa.PrivateKey, error) {
+	certPath := filepath.Join(caDir, certFilename)
+	keyPath := filepath.Join(caDir, keyFilename)
 
-	cert, key, err := loadCA(certPath, keyPath)
+	cert, key, err := load(certPath, keyPath)
 	if err == nil {
 		return cert, key, nil
 	}
@@ -35,12 +35,12 @@ func loadOrGenerateCA(caDir string) (*x509.Certificate, *rsa.PrivateKey, error) 
 		return nil, nil, fmt.Errorf("failed to create CA directory %s: %w", caDir, err)
 	}
 
-	cert, key, err = generateCA()
+	cert, key, err = Generate()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to generate CA: %w", err)
 	}
 
-	if err := saveCA(certPath, keyPath, cert, key); err != nil {
+	if err := save(certPath, keyPath, cert, key); err != nil {
 		return nil, nil, fmt.Errorf("failed to save CA: %w", err)
 	}
 
@@ -50,7 +50,7 @@ func loadOrGenerateCA(caDir string) (*x509.Certificate, *rsa.PrivateKey, error) 
 	return cert, key, nil
 }
 
-func loadCA(certPath, keyPath string) (*x509.Certificate, *rsa.PrivateKey, error) {
+func load(certPath, keyPath string) (*x509.Certificate, *rsa.PrivateKey, error) {
 	certPEM, err := os.ReadFile(certPath)
 	if err != nil {
 		return nil, nil, err
@@ -84,7 +84,7 @@ func loadCA(certPath, keyPath string) (*x509.Certificate, *rsa.PrivateKey, error
 	return cert, key, nil
 }
 
-func generateCA() (*x509.Certificate, *rsa.PrivateKey, error) {
+func Generate() (*x509.Certificate, *rsa.PrivateKey, error) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, nil, err
@@ -123,11 +123,11 @@ func generateCA() (*x509.Certificate, *rsa.PrivateKey, error) {
 	return cert, key, nil
 }
 
-func encodeCertPEM(cert *x509.Certificate) []byte {
+func EncodeCertPEM(cert *x509.Certificate) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
 }
 
-func saveCA(certPath, keyPath string, cert *x509.Certificate, key *rsa.PrivateKey) error {
+func save(certPath, keyPath string, cert *x509.Certificate, key *rsa.PrivateKey) error {
 	certFile, err := os.OpenFile(certPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 	if err != nil {
 		return err

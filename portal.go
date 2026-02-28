@@ -9,6 +9,8 @@ import (
 	"net/url"
 
 	qrcode "github.com/skip2/go-qrcode"
+
+	"ublproxy/internal/mobileconfig"
 )
 
 //go:embed static/portal.html
@@ -89,7 +91,7 @@ func (s *setupHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/ublproxy.mobileconfig" {
 		pacURL := s.httpOrigin + "/mobile.pac"
-		serveMobileconfig(w, s.caCert, pacURL)
+		mobileconfig.Serve(w, s.caCert, pacURL)
 		return
 	}
 	if r.URL.Path == "/proxy.pac" {
@@ -318,7 +320,7 @@ func (p *proxyHandler) handleSetup(w http.ResponseWriter, r *http.Request) {
 
 func (p *proxyHandler) handleMobileconfig(w http.ResponseWriter, r *http.Request) {
 	pacURL := p.httpOrigin + "/mobile.pac"
-	serveMobileconfig(w, p.certs.caCert, pacURL)
+	mobileconfig.Serve(w, p.certs.CACert, pacURL)
 }
 
 func (p *proxyHandler) handlePortalCACert(w http.ResponseWriter, r *http.Request) {

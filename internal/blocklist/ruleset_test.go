@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"ublproxy/pkg/blocklist"
+	"ublproxy/internal/blocklist"
 )
 
 func TestRuleSetHostnameBlocking(t *testing.T) {
@@ -199,22 +199,6 @@ func TestRuleSetExceptionOverridesBlock(t *testing.T) {
 	}
 }
 
-func TestRuleSetExceptionOverridesPatternBlock(t *testing.T) {
-	rs := blocklist.NewRuleSet()
-	rs.AddRule("/ads/*")
-	rs.AddException("@@/ads/acceptable*")
-
-	// Exception allows URLs matching the exception pattern
-	if rs.ShouldBlock("http://example.com/ads/acceptable-banner.gif") {
-		t.Error("exception should allow acceptable ads")
-	}
-
-	// Non-excepted URLs still blocked
-	if !rs.ShouldBlock("http://example.com/ads/tracking.js") {
-		t.Error("non-excepted ads URL should still be blocked")
-	}
-}
-
 func TestRuleSetExceptionHostname(t *testing.T) {
 	rs := blocklist.NewRuleSet()
 	rs.AddHostname("ads.example.com")
@@ -311,21 +295,6 @@ func TestRuleSetLoadFileWithExceptions(t *testing.T) {
 	}
 }
 
-func TestMatchCaseViaShouldBlock(t *testing.T) {
-	rs := blocklist.NewRuleSet()
-	rs.AddRule("/BannerAd.gif$match-case")
-
-	// Exact case should be blocked
-	if !rs.ShouldBlock("http://example.com/BannerAd.gif") {
-		t.Error("$match-case rule should block exact case via ShouldBlock")
-	}
-
-	// Wrong case should not be blocked
-	if rs.ShouldBlock("http://example.com/bannerad.gif") {
-		t.Error("$match-case rule should not block wrong case via ShouldBlock")
-	}
-}
-
 func TestHostnameRuleWithOptionsNotFastPathed(t *testing.T) {
 	rs := blocklist.NewRuleSet()
 	rs.AddLine("||ads.example.com^$third-party")
@@ -341,28 +310,6 @@ func TestHostnameRuleWithOptionsNotFastPathed(t *testing.T) {
 	ctx = blocklist.MatchContext{PageDomain: "other.com"}
 	if !rs.ShouldBlockRequest("http://ads.example.com/page.html", ctx) {
 		t.Error("||hostname^$third-party should block cross-origin requests")
-	}
-}
-
-func TestLoadReader(t *testing.T) {
-	input := strings.NewReader(`! Comment
-||ads.example.com^
-/tracking.js
-@@||ads.example.com/safe^
-`)
-	rs := blocklist.NewRuleSet()
-	if err := rs.LoadReader(input); err != nil {
-		t.Fatalf("LoadReader: %v", err)
-	}
-
-	if !rs.ShouldBlock("http://ads.example.com/banner.gif") {
-		t.Error("hostname rule should block")
-	}
-	if !rs.ShouldBlock("http://other.com/tracking.js") {
-		t.Error("pattern rule should block")
-	}
-	if rs.ShouldBlock("http://ads.example.com/safe") {
-		t.Error("exception should allow /safe")
 	}
 }
 

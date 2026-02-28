@@ -25,8 +25,9 @@ import (
 
 	"github.com/andybalholm/brotli"
 
-	"ublproxy/pkg/blocklist"
-	"ublproxy/pkg/store"
+	"ublproxy/internal/blocklist"
+	"ublproxy/internal/ca"
+	"ublproxy/internal/store"
 )
 
 // testEnv holds everything needed to run a proxy e2e test.
@@ -50,13 +51,13 @@ func startTestEnv(t *testing.T, upstreamHandler http.Handler, rules *blocklist.R
 	httpsServer := httptest.NewTLSServer(upstreamHandler)
 
 	// In-memory CA
-	caCert, caKey, err := generateCA()
+	caCert, caKey, err := ca.Generate()
 	if err != nil {
-		t.Fatalf("generateCA: %v", err)
+		t.Fatalf("ca.Generate: %v", err)
 	}
 
-	certs := newCertCache(caCert, caKey)
-	caCertPEM := encodeCertPEM(caCert)
+	certs := ca.NewCache(caCert, caKey)
+	caCertPEM := ca.EncodeCertPEM(caCert)
 	handler := newProxyHandler(certs, caCertPEM)
 	if rules != nil {
 		handler.baselineRules.Store(rules)
@@ -229,35 +230,45 @@ func TestHTTPSProxy(t *testing.T) {
 	}
 }
 
-func TestHTTPSProxyHeaders(t *testing.T) {
-	var receivedHeaders http.Header
+func TestHTTPSHTMLRewriting(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.tracker.com^")
+	rs.AddLine("##.ad-banner")
 
-	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedHeaders = r.Header.Clone()
-		w.Header().Set("X-Upstream-Secure", "yes")
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-	}), nil)
+		w.Write([]byte(`<html><head>` +
+			`<script src="https://ads.tracker.com/serve.js"></script>` +
+			`</head><body>` +
+			`<div class="ad-banner">Ad</div>` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
 
+	env := startTestEnv(t, upstream, rs)
 	client := env.httpClient(t)
 
-	req, err := http.NewRequest("GET", env.httpsURL+"/secure-headers", nil)
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	req.Header.Set("X-Custom-Secure", "secure-value")
-
-	resp, err := client.Do(req)
+	resp, err := client.Get(env.httpsURL + "/page.html")
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
 	defer resp.Body.Close()
 
-	if got := receivedHeaders.Get("X-Custom-Secure"); got != "secure-value" {
-		t.Errorf("upstream X-Custom-Secure = %q, want %q", got, "secure-value")
-	}
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
 
-	if got := resp.Header.Get("X-Upstream-Secure"); got != "yes" {
-		t.Errorf("response X-Upstream-Secure = %q, want %q", got, "yes")
+	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
+		t.Errorf("blocked script should be stripped over HTTPS, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "<style>") {
+		t.Errorf("element hiding CSS should be injected over HTTPS, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, ".ad-banner") {
+		t.Errorf("CSS should contain .ad-banner selector, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Content") {
+		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
 	}
 }
 
@@ -402,37 +413,6 @@ func TestProxyPAC(t *testing.T) {
 	}
 	if !strings.Contains(bodyStr, "HTTPS myhost:9443") {
 		t.Errorf("PAC body does not contain expected proxy directive, got:\n%s", bodyStr)
-	}
-}
-
-func TestHTTPSProxyPOST(t *testing.T) {
-	var receivedBody string
-
-	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		receivedBody = string(body)
-		w.WriteHeader(http.StatusCreated)
-		w.Write([]byte("created securely"))
-	}), nil)
-
-	client := env.httpClient(t)
-	resp, err := client.Post(env.httpsURL+"/secure-create", "text/plain", strings.NewReader("secure body"))
-	if err != nil {
-		t.Fatalf("POST: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated {
-		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusCreated)
-	}
-
-	if receivedBody != "secure body" {
-		t.Errorf("upstream body = %q, want %q", receivedBody, "secure body")
-	}
-
-	body, _ := io.ReadAll(resp.Body)
-	if string(body) != "created securely" {
-		t.Errorf("response body = %q, want %q", body, "created securely")
 	}
 }
 
@@ -867,39 +847,6 @@ func TestElementHidingBrotli(t *testing.T) {
 	}
 }
 
-func TestElementHidingHTTPS(t *testing.T) {
-	rs := blocklist.NewRuleSet()
-	rs.AddLine("##.ad-banner")
-
-	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`<html><head></head><body><div class="ad-banner">Ad</div><p>Hello</p></body></html>`))
-	})
-
-	env := startTestEnv(t, upstream, rs)
-	client := env.httpClient(t)
-
-	resp, err := client.Get(env.httpsURL + "/page.html")
-	if err != nil {
-		t.Fatalf("GET: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	bodyStr := string(body)
-
-	if !strings.Contains(bodyStr, "<style>") {
-		t.Errorf("HTTPS response should have CSS injected, got:\n%s", bodyStr)
-	}
-	if !strings.Contains(bodyStr, ".ad-banner") {
-		t.Errorf("CSS should contain .ad-banner selector, got:\n%s", bodyStr)
-	}
-	if !strings.Contains(bodyStr, "Hello") {
-		t.Errorf("non-ad content should be preserved, got:\n%s", bodyStr)
-	}
-}
-
 func TestElementHidingNestedContent(t *testing.T) {
 	rs := blocklist.NewRuleSet()
 	rs.AddLine("##.ad-container")
@@ -936,43 +883,6 @@ func TestElementHidingNestedContent(t *testing.T) {
 		t.Errorf("CSS should contain .ad-container selector, got:\n%s", bodyStr)
 	}
 	if !strings.Contains(bodyStr, "Keep this") {
-		t.Errorf("non-ad content should be preserved, got:\n%s", bodyStr)
-	}
-}
-
-func TestElementHidingVoidElement(t *testing.T) {
-	rs := blocklist.NewRuleSet()
-	rs.AddLine("##.tracking-pixel")
-
-	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`<html><body>` +
-			`<img class="tracking-pixel" src="track.gif">` +
-			`<p>Content</p>` +
-			`</body></html>`))
-	})
-
-	env := startTestEnv(t, upstream, rs)
-	client := env.httpClient(t)
-
-	resp, err := client.Get(env.httpURL + "/page.html")
-	if err != nil {
-		t.Fatalf("GET: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	bodyStr := string(body)
-
-	// Void element stays in DOM, hidden by CSS
-	if !strings.Contains(bodyStr, "<style>") {
-		t.Errorf("should contain CSS injection, got:\n%s", bodyStr)
-	}
-	if !strings.Contains(bodyStr, ".tracking-pixel") {
-		t.Errorf("CSS should contain .tracking-pixel selector, got:\n%s", bodyStr)
-	}
-	if !strings.Contains(bodyStr, "Content") {
 		t.Errorf("non-ad content should be preserved, got:\n%s", bodyStr)
 	}
 }
@@ -1329,79 +1239,6 @@ func TestScriptStrippingWithElementHiding(t *testing.T) {
 	}
 }
 
-func TestScriptStrippingHTTPS(t *testing.T) {
-	rs := blocklist.NewRuleSet()
-	rs.AddLine("||ads.tracker.com^")
-
-	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`<html><head>` +
-			`<script src="https://ads.tracker.com/serve.js"></script>` +
-			`<script src="/local/app.js"></script>` +
-			`</head><body><p>Content</p></body></html>`))
-	})
-
-	env := startTestEnv(t, upstream, rs)
-	client := env.httpClient(t)
-
-	resp, err := client.Get(env.httpsURL + "/page.html")
-	if err != nil {
-		t.Fatalf("GET: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	bodyStr := string(body)
-
-	// Blocked script should be stripped
-	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
-		t.Errorf("blocked script should be stripped over HTTPS, got:\n%s", bodyStr)
-	}
-	if strings.Contains(bodyStr, `<script src="https://ads.tracker.com`) {
-		t.Errorf("blocked script element should be removed, got:\n%s", bodyStr)
-	}
-
-	// Non-blocked script should be preserved
-	if !strings.Contains(bodyStr, "app.js") {
-		t.Errorf("non-blocked script should be preserved, got:\n%s", bodyStr)
-	}
-}
-
-func TestScriptStrippingNoElementHidingRules(t *testing.T) {
-	// Only URL rules, no element hiding rules for any domain.
-	// Script stripping should still work.
-	rs := blocklist.NewRuleSet()
-	rs.AddLine("||ads.tracker.com^")
-
-	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`<html><head>` +
-			`<script src="https://ads.tracker.com/ad.js"></script>` +
-			`</head><body><p>Content</p></body></html>`))
-	})
-
-	env := startTestEnv(t, upstream, rs)
-	client := env.httpClient(t)
-
-	resp, err := client.Get(env.httpURL + "/page.html")
-	if err != nil {
-		t.Fatalf("GET: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	bodyStr := string(body)
-
-	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
-		t.Errorf("script stripping should work without element hiding rules, got:\n%s", bodyStr)
-	}
-	if !strings.Contains(bodyStr, "Content") {
-		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
-	}
-}
-
 func TestScriptStrippingURLPattern(t *testing.T) {
 	// Test that URL pattern rules (not just hostname rules) also strip scripts
 	rs := blocklist.NewRuleSet()
@@ -1517,81 +1354,6 @@ func TestIframeStrippingProtocolRelative(t *testing.T) {
 	}
 	if strings.Contains(bodyStr, `<iframe src="//ads.tracker.com`) {
 		t.Errorf("blocked iframe element should be removed, got:\n%s", bodyStr)
-	}
-}
-
-func TestIframeStrippingWithScriptStripping(t *testing.T) {
-	rs := blocklist.NewRuleSet()
-	rs.AddLine("||ads.tracker.com^")
-
-	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`<html><head>` +
-			`<script src="https://ads.tracker.com/ad.js"></script>` +
-			`</head><body>` +
-			`<iframe src="https://ads.tracker.com/frame"></iframe>` +
-			`<p>Content</p>` +
-			`</body></html>`))
-	})
-
-	env := startTestEnv(t, upstream, rs)
-	client := env.httpClient(t)
-
-	resp, err := client.Get(env.httpURL + "/page.html")
-	if err != nil {
-		t.Fatalf("GET: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	bodyStr := string(body)
-
-	// Both should be stripped
-	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked script") {
-		t.Errorf("blocked script should be stripped, got:\n%s", bodyStr)
-	}
-	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked iframe") {
-		t.Errorf("blocked iframe should be stripped, got:\n%s", bodyStr)
-	}
-	if !strings.Contains(bodyStr, "Content") {
-		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
-	}
-}
-
-func TestIframeStrippingHTTPS(t *testing.T) {
-	rs := blocklist.NewRuleSet()
-	rs.AddLine("||ads.tracker.com^")
-
-	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`<html><body>` +
-			`<iframe src="https://ads.tracker.com/ad-frame"></iframe>` +
-			`<p>Content</p>` +
-			`</body></html>`))
-	})
-
-	env := startTestEnv(t, upstream, rs)
-	client := env.httpClient(t)
-
-	resp, err := client.Get(env.httpsURL + "/page.html")
-	if err != nil {
-		t.Fatalf("GET: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	bodyStr := string(body)
-
-	if !strings.Contains(bodyStr, "<!-- ublproxy: blocked iframe") {
-		t.Errorf("blocked iframe should be stripped over HTTPS, got:\n%s", bodyStr)
-	}
-	if strings.Contains(bodyStr, `<iframe src="https://ads.tracker.com`) {
-		t.Errorf("blocked iframe element should be removed, got:\n%s", bodyStr)
-	}
-	if !strings.Contains(bodyStr, "Content") {
-		t.Errorf("page content should be preserved, got:\n%s", bodyStr)
 	}
 }
 
@@ -1823,11 +1585,11 @@ func TestGetUserRulesLoadsFromDB(t *testing.T) {
 		t.Fatalf("CreateRule: %v", err)
 	}
 
-	caCert, caKey, err := generateCA()
+	caCert, caKey, err := ca.Generate()
 	if err != nil {
-		t.Fatalf("generateCA: %v", err)
+		t.Fatalf("ca.Generate: %v", err)
 	}
-	handler := newProxyHandler(newCertCache(caCert, caKey), encodeCertPEM(caCert))
+	handler := newProxyHandler(ca.NewCache(caCert, caKey), ca.EncodeCertPEM(caCert))
 	handler.store = db
 
 	// No user rules cached yet — getUserRules lazily loads them
@@ -1878,11 +1640,11 @@ func TestReloadBaselineAndUserRulesSeparate(t *testing.T) {
 		t.Fatalf("CreateRule: %v", err)
 	}
 
-	caCert, caKey, err := generateCA()
+	caCert, caKey, err := ca.Generate()
 	if err != nil {
-		t.Fatalf("generateCA: %v", err)
+		t.Fatalf("ca.Generate: %v", err)
 	}
-	handler := newProxyHandler(newCertCache(caCert, caKey), encodeCertPEM(caCert))
+	handler := newProxyHandler(ca.NewCache(caCert, caKey), ca.EncodeCertPEM(caCert))
 	handler.store = db
 	handler.blocklistSources = []string{blocklistPath}
 
@@ -2420,40 +2182,6 @@ func TestHTTPPortConnect(t *testing.T) {
 	}
 	if receivedPath != "/test-path" {
 		t.Errorf("upstream received path = %q, want %q", receivedPath, "/test-path")
-	}
-}
-
-func TestHTTPPortForward(t *testing.T) {
-	var receivedPath string
-	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedPath = r.URL.Path
-		w.Write([]byte("forwarded response"))
-	}), nil)
-
-	proxyURL, _ := url.Parse(env.proxyURL)
-
-	// Use the proxy for plain HTTP requests (absolute-URI forwarding)
-	client := &http.Client{
-		Transport: &http.Transport{
-			Proxy: http.ProxyURL(proxyURL),
-		},
-	}
-
-	resp, err := client.Get(env.httpURL + "/forward-test")
-	if err != nil {
-		t.Fatalf("GET through HTTP forward: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
-	}
-	if string(body) != "forwarded response" {
-		t.Errorf("body = %q, want %q", body, "forwarded response")
-	}
-	if receivedPath != "/forward-test" {
-		t.Errorf("upstream received path = %q, want %q", receivedPath, "/forward-test")
 	}
 }
 

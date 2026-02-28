@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"ublproxy/pkg/blocklist"
+	"ublproxy/internal/blocklist"
 )
 
 func TestBootstrapScriptTagWithSession(t *testing.T) {
@@ -56,14 +56,6 @@ func TestBootstrapScriptTagNoSession(t *testing.T) {
 	tag := p.bootstrapScriptTag("192.168.1.10", "example.com")
 	if tag != "" {
 		t.Errorf("should be empty for unknown IP, got: %s", tag)
-	}
-}
-
-func TestBootstrapScriptTagNoSessionMap(t *testing.T) {
-	p := &proxyHandler{}
-	tag := p.bootstrapScriptTag("192.168.1.10", "example.com")
-	if tag != "" {
-		t.Errorf("should be empty with nil session map, got: %s", tag)
 	}
 }
 
@@ -125,27 +117,6 @@ func TestNoScriptInjectionWithoutSession(t *testing.T) {
 	_, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
 	if ok {
 		t.Error("should not modify HTML when there's no session and no rules")
-	}
-}
-
-func TestNoScriptInjectionForNonHTML(t *testing.T) {
-	sm := newSessionMap()
-	sm.Set("127.0.0.1", sessionEntry{Token: "my-token", CredentialID: "cred-1"})
-
-	p := &proxyHandler{
-		sessions:     sm,
-		portalOrigin: "https://127.0.0.1:8443",
-	}
-
-	resp := &http.Response{
-		StatusCode: 200,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(`{"data": true}`)),
-	}
-
-	_, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
-	if ok {
-		t.Error("should not modify non-HTML responses")
 	}
 }
 

@@ -3,7 +3,7 @@ package blocklist_test
 import (
 	"testing"
 
-	"ublproxy/pkg/blocklist"
+	"ublproxy/internal/blocklist"
 )
 
 func TestPatternMatch(t *testing.T) {

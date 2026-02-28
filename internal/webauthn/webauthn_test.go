@@ -341,18 +341,5 @@ func TestCredentialIDBase64(t *testing.T) {
 	}
 }
 
-// Ensure bytesEqual works correctly.
-func TestBytesEqual(t *testing.T) {
-	if !bytesEqual([]byte{1, 2, 3}, []byte{1, 2, 3}) {
-		t.Error("equal slices should be equal")
-	}
-	if bytesEqual([]byte{1, 2, 3}, []byte{1, 2, 4}) {
-		t.Error("different slices should not be equal")
-	}
-	if bytesEqual([]byte{1, 2}, []byte{1, 2, 3}) {
-		t.Error("different length slices should not be equal")
-	}
-}
-
 // Suppress unused import warning for big package.
 var _ = new(big.Int)

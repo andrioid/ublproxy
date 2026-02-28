@@ -1,4 +1,4 @@
-package main
+package mobileconfig
 
 import (
 	"crypto/sha256"
@@ -9,10 +9,10 @@ import (
 	"net/http"
 )
 
-// mobileconfigTmpl generates an Apple Configuration Profile (.mobileconfig)
+// tmpl generates an Apple Configuration Profile (.mobileconfig)
 // that bundles the CA certificate and proxy PAC URL into a single install.
 // This reduces the iOS/macOS onboarding from ~6 manual steps to 1.
-var mobileconfigTmpl = template.Must(template.New("mobileconfig").Parse(`<?xml version="1.0" encoding="UTF-8"?>
+var tmpl = template.Must(template.New("mobileconfig").Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -71,7 +71,7 @@ var mobileconfigTmpl = template.Must(template.New("mobileconfig").Parse(`<?xml v
 </plist>
 `))
 
-type mobileconfigData struct {
+type data struct {
 	CACertDER   string // base64-encoded DER certificate
 	PACURL      string
 	ProfileUUID string
@@ -91,8 +91,8 @@ func deterministicUUID(caCert *x509.Certificate, namespace string) string {
 		sum[0:4], sum[4:6], sum[6:8], sum[8:10], sum[10:16])
 }
 
-func serveMobileconfig(w http.ResponseWriter, caCert *x509.Certificate, pacURL string) {
-	data := mobileconfigData{
+func Serve(w http.ResponseWriter, caCert *x509.Certificate, pacURL string) {
+	d := data{
 		CACertDER:   base64.StdEncoding.EncodeToString(caCert.Raw),
 		PACURL:      pacURL,
 		ProfileUUID: deterministicUUID(caCert, "profile"),
@@ -103,5 +103,5 @@ func serveMobileconfig(w http.ResponseWriter, caCert *x509.Certificate, pacURL s
 	w.Header().Set("Content-Type", "application/x-apple-asix-config")
 	w.Header().Set("Content-Disposition", `attachment; filename="ublproxy.mobileconfig"`)
 	w.WriteHeader(http.StatusOK)
-	mobileconfigTmpl.Execute(w, data)
+	tmpl.Execute(w, d)
 }

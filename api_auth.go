@@ -4,7 +4,7 @@ import (
 	"encoding/base64"
 	"net/http"
 
-	"ublproxy/pkg/webauthn"
+	"ublproxy/internal/webauthn"
 )
 
 func (a *apiHandler) routeAuth(w http.ResponseWriter, r *http.Request, path string) {

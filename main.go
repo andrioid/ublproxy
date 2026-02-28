@@ -10,8 +10,9 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"ublproxy/pkg/store"
-	"ublproxy/pkg/webauthn"
+	"ublproxy/internal/ca"
+	"ublproxy/internal/store"
+	"ublproxy/internal/webauthn"
 )
 
 // version is set at build time via -ldflags "-X main.version=..."
@@ -91,13 +92,13 @@ func run(_ context.Context, cmd *cli.Command) error {
 	dbPath := cmd.String("db")
 	blocklistSources := cmd.StringSlice("blocklist")
 
-	caCert, caKey, err := loadOrGenerateCA(caDir)
+	caCert, caKey, err := ca.LoadOrGenerate(caDir)
 	if err != nil {
 		return fmt.Errorf("CA setup failed: %w", err)
 	}
 
-	certs := newCertCache(caCert, caKey)
-	caCertPEM := encodeCertPEM(caCert)
+	certs := ca.NewCache(caCert, caKey)
+	caCertPEM := ca.EncodeCertPEM(caCert)
 	handler := newProxyHandler(certs, caCertPEM)
 	activityLog := NewActivityLog(1000)
 	handler.activityLog = activityLog
