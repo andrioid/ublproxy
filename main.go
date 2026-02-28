@@ -14,6 +14,9 @@ import (
 	"ublproxy/pkg/webauthn"
 )
 
+// version is set at build time via -ldflags "-X main.version=..."
+var version = "dev"
+
 func main() {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -24,8 +27,9 @@ func main() {
 	defaultDataDir := filepath.Join(home, ".ublproxy")
 
 	cmd := &cli.Command{
-		Name:  "ublproxy",
-		Usage: "Ad-blocking HTTPS proxy with WebAuthn authentication",
+		Name:    "ublproxy",
+		Usage:   "Ad-blocking HTTPS proxy with WebAuthn authentication",
+		Version: version,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "addr",
