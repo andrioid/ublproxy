@@ -300,6 +300,12 @@ func (h *transparentHTTPHandler) forwardHTTP(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// WebSocket and other protocol upgrades need special handling
+	if isWebSocketUpgrade(r.Header) {
+		h.forwardHTTPUpgrade(w, r, targetURL)
+		return
+	}
+
 	start := time.Now()
 
 	outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
@@ -339,6 +345,68 @@ func (h *transparentHTTPHandler) forwardHTTP(w http.ResponseWriter, r *http.Requ
 	io.Copy(w, resp.Body)
 
 	logRequest(r.Method, targetURL, resp.StatusCode, time.Since(start))
+}
+
+// forwardHTTPUpgrade handles WebSocket and other protocol upgrade requests
+// in transparent HTTP mode. It mirrors proxyHandler.handleHTTPUpgrade but
+// builds the target URL from the Host header.
+func (h *transparentHTTPHandler) forwardHTTPUpgrade(w http.ResponseWriter, r *http.Request, targetURL string) {
+	outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+	if err != nil {
+		logError("transparent-http/upgrade/new-request", err)
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	copyHeaders(outReq.Header, r.Header)
+	removeHopByHopHeaders(outReq.Header)
+
+	// Re-add the upgrade headers that were stripped as hop-by-hop
+	outReq.Header.Set("Connection", "Upgrade")
+	outReq.Header.Set("Upgrade", r.Header.Get("Upgrade"))
+
+	resp, err := h.proxy.transport.RoundTrip(outReq)
+	if err != nil {
+		logError("transparent-http/upgrade/roundtrip", err)
+		http.Error(w, "upstream error", http.StatusBadGateway)
+		return
+	}
+
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		defer resp.Body.Close()
+		copyHeaders(w.Header(), resp.Header)
+		removeHopByHopHeaders(w.Header())
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+		return
+	}
+
+	upstreamConn, ok := resp.Body.(io.ReadWriteCloser)
+	if !ok {
+		resp.Body.Close()
+		http.Error(w, "upstream does not support hijacking", http.StatusInternalServerError)
+		return
+	}
+	defer upstreamConn.Close()
+
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
+		return
+	}
+
+	clientConn, clientBuf, err := hijacker.Hijack()
+	if err != nil {
+		logError("transparent-http/upgrade/hijack", err)
+		return
+	}
+	defer clientConn.Close()
+
+	resp.Body = nil
+	resp.Write(clientConn)
+	clientBuf.Flush()
+
+	bidirectionalCopy(clientConn, upstreamConn)
 }
 
 // serveTransparentTLS accepts raw TCP connections on the listener and
@@ -442,7 +510,7 @@ func handleTransparentPortalTLS(conn net.Conn, br *bufio.Reader, proxy *proxyHan
 	conn.SetDeadline(time.Time{})
 
 	// Serve portal pages over the TLS connection
-	portalH := &portalHandler{proxy: proxy}
+	portalH := &portalHandler{proxy: proxy, api: proxy.api}
 	server := http.Server{Handler: portalH}
 	serverConn := &singleConnListener{conn: tlsConn}
 	server.Serve(serverConn)

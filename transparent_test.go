@@ -387,12 +387,14 @@ func TestTransparentHTTPSTrustTracking(t *testing.T) {
 
 // --- Transparent HTTP proxy tests ---
 
-func TestTransparentHTTPProxy(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("hello http transparent"))
-	}))
-	defer upstream.Close()
+type transparentHTTPTestEnv struct {
+	server       *httptest.Server
+	proxy        *proxyHandler
+	trustTracker *caTrustTracker
+}
+
+func startTransparentHTTPTestEnv(t *testing.T) *transparentHTTPTestEnv {
+	t.Helper()
 
 	caCert, caKey, err := ca.Generate()
 	if err != nil {
@@ -413,10 +415,26 @@ func TestTransparentHTTPProxy(t *testing.T) {
 	}
 
 	server := httptest.NewServer(transparentH)
-	defer server.Close()
+	t.Cleanup(server.Close)
+
+	return &transparentHTTPTestEnv{
+		server:       server,
+		proxy:        handler,
+		trustTracker: trustTracker,
+	}
+}
+
+func TestTransparentHTTPProxy(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("hello http transparent"))
+	}))
+	defer upstream.Close()
+
+	env := startTransparentHTTPTestEnv(t)
 
 	upstreamHost := strings.TrimPrefix(upstream.URL, "http://")
-	req, _ := http.NewRequest("GET", server.URL+"/test", nil)
+	req, _ := http.NewRequest("GET", env.server.URL+"/test", nil)
 	req.Host = upstreamHost
 
 	resp, err := http.DefaultClient.Do(req)
@@ -437,28 +455,9 @@ func TestTransparentHTTPProxy(t *testing.T) {
 // --- Captive portal tests ---
 
 func TestCaptivePortalAppleDetection(t *testing.T) {
-	caCert, caKey, err := ca.Generate()
-	if err != nil {
-		t.Fatalf("ca.Generate: %v", err)
-	}
-	certs := ca.NewCache(caCert, caKey)
-	caCertPEM := ca.EncodeCertPEM(caCert)
-	handler := newProxyHandler(certs, caCertPEM)
-	handler.activityLog = NewActivityLog(100)
-	handler.portalOrigin = "https://proxy.local:8443"
-	handler.httpOrigin = "http://proxy.local:8080"
+	env := startTransparentHTTPTestEnv(t)
 
-	trustTracker := newCATrustTracker()
-	transparentH := &transparentHTTPHandler{
-		proxy:        handler,
-		trustTracker: trustTracker,
-		portalHost:   "proxy.local",
-	}
-
-	server := httptest.NewServer(transparentH)
-	defer server.Close()
-
-	req, _ := http.NewRequest("GET", server.URL+"/hotspot-detect.html", nil)
+	req, _ := http.NewRequest("GET", env.server.URL+"/hotspot-detect.html", nil)
 	req.Host = "captive.apple.com"
 
 	client := &http.Client{
@@ -488,32 +487,13 @@ func TestCaptivePortalTrustedClientBypass(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	caCert, caKey, err := ca.Generate()
-	if err != nil {
-		t.Fatalf("ca.Generate: %v", err)
-	}
-	certs := ca.NewCache(caCert, caKey)
-	caCertPEM := ca.EncodeCertPEM(caCert)
-	handler := newProxyHandler(certs, caCertPEM)
-	handler.activityLog = NewActivityLog(100)
-	handler.portalOrigin = "https://proxy.local:8443"
-	handler.httpOrigin = "http://proxy.local:8080"
-
-	trustTracker := newCATrustTracker()
-	transparentH := &transparentHTTPHandler{
-		proxy:        handler,
-		trustTracker: trustTracker,
-		portalHost:   "proxy.local",
-	}
-
-	server := httptest.NewServer(transparentH)
-	defer server.Close()
+	env := startTransparentHTTPTestEnv(t)
 
 	// Mark client IP as trusted
-	trustTracker.markTrusted("127.0.0.1")
+	env.trustTracker.markTrusted("127.0.0.1")
 
 	upstreamHost := strings.TrimPrefix(upstream.URL, "http://")
-	req, _ := http.NewRequest("GET", server.URL+"/hotspot-detect.html", nil)
+	req, _ := http.NewRequest("GET", env.server.URL+"/hotspot-detect.html", nil)
 	req.Host = upstreamHost
 
 	resp, err := http.DefaultClient.Do(req)
@@ -532,28 +512,9 @@ func TestCaptivePortalTrustedClientBypass(t *testing.T) {
 }
 
 func TestCaptivePortalAndroidDetection(t *testing.T) {
-	caCert, caKey, err := ca.Generate()
-	if err != nil {
-		t.Fatalf("ca.Generate: %v", err)
-	}
-	certs := ca.NewCache(caCert, caKey)
-	caCertPEM := ca.EncodeCertPEM(caCert)
-	handler := newProxyHandler(certs, caCertPEM)
-	handler.activityLog = NewActivityLog(100)
-	handler.portalOrigin = "https://proxy.local:8443"
-	handler.httpOrigin = "http://proxy.local:8080"
+	env := startTransparentHTTPTestEnv(t)
 
-	trustTracker := newCATrustTracker()
-	transparentH := &transparentHTTPHandler{
-		proxy:        handler,
-		trustTracker: trustTracker,
-		portalHost:   "proxy.local",
-	}
-
-	server := httptest.NewServer(transparentH)
-	defer server.Close()
-
-	req, _ := http.NewRequest("GET", server.URL+"/generate_204", nil)
+	req, _ := http.NewRequest("GET", env.server.URL+"/generate_204", nil)
 	req.Host = "connectivitycheck.gstatic.com"
 
 	client := &http.Client{
@@ -573,28 +534,9 @@ func TestCaptivePortalAndroidDetection(t *testing.T) {
 }
 
 func TestTransparentHTTPPortalAccess(t *testing.T) {
-	caCert, caKey, err := ca.Generate()
-	if err != nil {
-		t.Fatalf("ca.Generate: %v", err)
-	}
-	certs := ca.NewCache(caCert, caKey)
-	caCertPEM := ca.EncodeCertPEM(caCert)
-	handler := newProxyHandler(certs, caCertPEM)
-	handler.activityLog = NewActivityLog(100)
-	handler.portalOrigin = "https://proxy.local:8443"
-	handler.httpOrigin = "http://proxy.local:8080"
+	env := startTransparentHTTPTestEnv(t)
 
-	trustTracker := newCATrustTracker()
-	transparentH := &transparentHTTPHandler{
-		proxy:        handler,
-		trustTracker: trustTracker,
-		portalHost:   "proxy.local",
-	}
-
-	server := httptest.NewServer(transparentH)
-	defer server.Close()
-
-	req, _ := http.NewRequest("GET", server.URL+"/", nil)
+	req, _ := http.NewRequest("GET", env.server.URL+"/", nil)
 	req.Host = "proxy.local"
 
 	resp, err := http.DefaultClient.Do(req)
