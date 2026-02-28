@@ -416,6 +416,55 @@ func TestProxyPAC(t *testing.T) {
 	}
 }
 
+func TestPACBypassesPrivateNetworks(t *testing.T) {
+	env := startTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), nil)
+
+	env.handler.portalOrigin = "https://myhost.local:9443"
+	env.handler.httpOrigin = "http://192.168.1.100:8080"
+
+	// Desktop PAC should bypass private networks
+	resp, err := http.Get(env.proxyURL + "/proxy.pac")
+	if err != nil {
+		t.Fatalf("GET /proxy.pac: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	pac := string(body)
+
+	privateRanges := []struct {
+		pattern string
+		desc    string
+	}{
+		{`isInNet(host, "10.0.0.0", "255.0.0.0")`, "10.0.0.0/8"},
+		{`isInNet(host, "172.16.0.0", "255.240.0.0")`, "172.16.0.0/12"},
+		{`isInNet(host, "192.168.0.0", "255.255.0.0")`, "192.168.0.0/16"},
+		{`isInNet(host, "169.254.0.0", "255.255.0.0")`, "169.254.0.0/16"},
+		{`*.local`, ".local mDNS"},
+	}
+	for _, r := range privateRanges {
+		if !strings.Contains(pac, r.pattern) {
+			t.Errorf("desktop PAC missing bypass for %s (%s)", r.desc, r.pattern)
+		}
+	}
+
+	// Mobile PAC should also bypass private networks
+	resp, err = http.Get(env.proxyURL + "/mobile.pac")
+	if err != nil {
+		t.Fatalf("GET /mobile.pac: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	mobilePac := string(body)
+
+	for _, r := range privateRanges {
+		if !strings.Contains(mobilePac, r.pattern) {
+			t.Errorf("mobile PAC missing bypass for %s (%s)", r.desc, r.pattern)
+		}
+	}
+}
+
 func TestBlocksHTTPByHostname(t *testing.T) {
 	var upstreamHit atomic.Bool
 

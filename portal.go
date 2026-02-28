@@ -118,6 +118,11 @@ func (s *setupHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
+type pacData struct {
+	ProxyDirective string // "HTTPS" for desktop, "PROXY" for mobile
+	ProxyHost      string // e.g. "myhost:9443"
+}
+
 // handlePAC serves a Proxy Auto-Configuration file that directs browsers
 // to use the ublproxy HTTPS proxy for all non-local traffic.
 func (s *setupHandler) handlePAC(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +132,7 @@ func (s *setupHandler) handlePAC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
-	pacTmpl.Execute(w, struct{ ProxyHost string }{parsed.Host})
+	pacTmpl.Execute(w, pacData{ProxyDirective: "HTTPS", ProxyHost: parsed.Host})
 }
 
 type setupData struct {
@@ -161,31 +166,20 @@ func handleSetupVerify(w http.ResponseWriter, r *http.Request, httpOrigin string
 	})
 }
 
+// pacTmpl is the single PAC template used by both desktop and mobile.
+// Desktop uses ProxyDirective "HTTPS host:port", mobile uses "PROXY host:port"
+// because iOS/Android do not support the HTTPS PAC proxy type.
 var pacTmpl = template.Must(template.New("pac").Parse(`function FindProxyForURL(url, host) {
   if (isPlainHostName(host) ||
       host === "localhost" || host === "127.0.0.1" || host === "::1") {
     return "DIRECT";
   }
-  // Captive portal / connectivity checks must bypass the proxy
-  // so the OS can verify internet access after wifi connects.
-  if (host === "captive.apple.com" ||
-      host === "connectivitycheck.gstatic.com" ||
-      host === "connectivitycheck.android.com" ||
-      host === "clients3.google.com" ||
-      host === "www.msftconnecttest.com" ||
-      host === "dns.msftncsi.com" ||
-      host === "detectportal.firefox.com") {
-    return "DIRECT";
-  }
-  return "HTTPS {{.ProxyHost}}";
-}
-`))
-
-// mobilePacTmpl returns PROXY (plain HTTP) instead of HTTPS. iOS and Android
-// do not support the HTTPS PAC proxy type, so mobile devices use this file.
-var mobilePacTmpl = template.Must(template.New("mobilepac").Parse(`function FindProxyForURL(url, host) {
-  if (isPlainHostName(host) ||
-      host === "localhost" || host === "127.0.0.1" || host === "::1") {
+  // Private/reserved networks — no reason to proxy local traffic.
+  if (isInNet(host, "10.0.0.0", "255.0.0.0") ||
+      isInNet(host, "172.16.0.0", "255.240.0.0") ||
+      isInNet(host, "192.168.0.0", "255.255.0.0") ||
+      isInNet(host, "169.254.0.0", "255.255.0.0") ||
+      shExpMatch(host, "*.local")) {
     return "DIRECT";
   }
   // Captive portal / connectivity checks must bypass the proxy
@@ -199,7 +193,7 @@ var mobilePacTmpl = template.Must(template.New("mobilepac").Parse(`function Find
       host === "detectportal.firefox.com") {
     return "DIRECT";
   }
-  return "PROXY {{.ProxyHost}}";
+  return "{{.ProxyDirective}} {{.ProxyHost}}";
 }
 `))
 
@@ -210,7 +204,7 @@ func (s *setupHandler) handleMobilePAC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
-	mobilePacTmpl.Execute(w, struct{ ProxyHost string }{parsed.Host})
+	pacTmpl.Execute(w, pacData{ProxyDirective: "PROXY", ProxyHost: parsed.Host})
 }
 
 func (s *setupHandler) handleQR(w http.ResponseWriter, r *http.Request) {
@@ -265,7 +259,7 @@ func (p *proxyHandler) handlePAC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
-	pacTmpl.Execute(w, struct{ ProxyHost string }{parsed.Host})
+	pacTmpl.Execute(w, pacData{ProxyDirective: "HTTPS", ProxyHost: parsed.Host})
 }
 
 func (p *proxyHandler) handleQR(w http.ResponseWriter, r *http.Request) {
@@ -287,7 +281,7 @@ func (p *proxyHandler) handleMobilePAC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
-	mobilePacTmpl.Execute(w, struct{ ProxyHost string }{parsed.Host})
+	pacTmpl.Execute(w, pacData{ProxyDirective: "PROXY", ProxyHost: parsed.Host})
 }
 
 func serveHTML(w http.ResponseWriter, content string) {
