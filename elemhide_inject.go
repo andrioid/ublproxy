@@ -171,8 +171,12 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 	modified, strippedCount := stripBlockedResources(body, sc)
 	stats.Stripped = strippedCount
 
-	// Merge baseline + user element hiding CSS, applying user #@# exceptions
-	css, selectors := mergeElementHidingCSS(baselineEH, userEH, userRS, host)
+	// Merge baseline + user element hiding selectors, then filter to only
+	// those that match classes/IDs actually present in the HTML. This avoids
+	// injecting tens of thousands of global selectors that don't apply.
+	allSelectors := mergeElementHidingSelectors(baselineEH, userEH, userRS, host)
+	selectors := filterSelectors(allSelectors, modified)
+	css := buildElementHidingCSS(selectors)
 	if css != "" {
 		safeCSS := styleCloseRe.ReplaceAllString(css, `<\/style`)
 		styleTag := []byte("<style>" + safeCSS + "</style>")
@@ -195,10 +199,10 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 	return modified, stats
 }
 
-// mergeElementHidingCSS combines element hiding selectors from baseline and
-// user RuleSets for a specific domain. User #@# exception rules suppress
-// matching baseline ## selectors. Returns empty string if no CSS to inject.
-func mergeElementHidingCSS(baseline, user *blocklist.ElementHiding, userRS *blocklist.RuleSet, domain string) (string, []string) {
+// mergeElementHidingSelectors collects element hiding selectors from baseline
+// and user RuleSets for a specific domain. User #@# exception rules suppress
+// matching baseline ## selectors. Returns nil if no selectors apply.
+func mergeElementHidingSelectors(baseline, user *blocklist.ElementHiding, userRS *blocklist.RuleSet, domain string) []string {
 	var selectors []string
 
 	// Add baseline selectors, filtering out any excepted by user #@# rules
@@ -216,12 +220,16 @@ func mergeElementHidingCSS(baseline, user *blocklist.ElementHiding, userRS *bloc
 		selectors = append(selectors, user.Selectors...)
 	}
 
-	if len(selectors) == 0 {
-		return "", nil
-	}
+	return selectors
+}
 
-	css := strings.Join(selectors, ",\n") + " {\n  display: none !important;\n}\n"
-	return css, selectors
+// buildElementHidingCSS produces a display:none stylesheet from a list of
+// CSS selectors. Returns empty string if the list is empty.
+func buildElementHidingCSS(selectors []string) string {
+	if len(selectors) == 0 {
+		return ""
+	}
+	return strings.Join(selectors, ",\n") + " {\n  display: none !important;\n}\n"
 }
 
 // injectBeforeClose inserts content before the first found closing tag,

@@ -284,7 +284,12 @@ func TestElementHidingStatsCountsSelectors(t *testing.T) {
 	p := &proxyHandler{sessions: newSessionMap()}
 	p.baselineRules.Store(rs)
 
-	htmlBody := `<html><head></head><body><p>Content</p></body></html>`
+	// HTML contains all three classes so all selectors match
+	htmlBody := `<html><head></head><body>` +
+		`<div class="ad-banner">Ad</div>` +
+		`<img class="tracking-pixel">` +
+		`<div class="sponsored">Promo</div>` +
+		`</body></html>`
 	resp := &http.Response{
 		StatusCode: 200,
 		Header:     http.Header{"Content-Type": []string{"text/html"}},
@@ -384,5 +389,60 @@ func TestElementHidingStatsNoModification(t *testing.T) {
 	}
 	if stats.Hidden != 0 || stats.Stripped != 0 {
 		t.Errorf("stats should be zero for unmodified response, got hidden=%d stripped=%d", stats.Hidden, stats.Stripped)
+	}
+}
+
+func TestElementHidingFiltersUnmatchedSelectors(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("##.ad-banner")      // matches
+	rs.AddLine("##.tracking-pixel") // no match — class not in HTML
+	rs.AddLine("##.sponsored")      // no match
+	rs.AddLine("##.augl")           // matches
+	rs.AddLine("###slot-668")       // matches
+	rs.AddLine("##.nonexistent")    // no match
+
+	p := &proxyHandler{sessions: newSessionMap()}
+	p.baselineRules.Store(rs)
+
+	htmlBody := `<html><head></head><body>` +
+		`<div class="ad-banner">Ad</div>` +
+		`<aside class="augl" id="slot-668">Augl</aside>` +
+		`<p>Content</p>` +
+		`</body></html>`
+	resp := &http.Response{
+		StatusCode: 200,
+		Header:     http.Header{"Content-Type": []string{"text/html"}},
+		Body:       io.NopCloser(strings.NewReader(htmlBody)),
+	}
+
+	modified, stats := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
+	if !stats.Modified {
+		t.Fatal("expected modification")
+	}
+	// Only 3 selectors match the HTML (ad-banner, augl, #slot-668)
+	if stats.Hidden != 3 {
+		t.Errorf("Hidden = %d, want 3", stats.Hidden)
+	}
+
+	body := string(modified)
+	// Matching selectors should be in the CSS
+	if !strings.Contains(body, ".ad-banner") {
+		t.Error("CSS should contain .ad-banner")
+	}
+	if !strings.Contains(body, ".augl") {
+		t.Error("CSS should contain .augl")
+	}
+	if !strings.Contains(body, "#slot-668") {
+		t.Error("CSS should contain #slot-668")
+	}
+	// Non-matching selectors should NOT be in the CSS
+	if strings.Contains(body, ".tracking-pixel") {
+		t.Error("CSS should NOT contain .tracking-pixel (not in HTML)")
+	}
+	if strings.Contains(body, ".sponsored") {
+		t.Error("CSS should NOT contain .sponsored (not in HTML)")
+	}
+	if strings.Contains(body, ".nonexistent") {
+		t.Error("CSS should NOT contain .nonexistent (not in HTML)")
 	}
 }

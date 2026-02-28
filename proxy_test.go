@@ -2247,6 +2247,7 @@ func TestStatsHeaderOnModifiedHTML(t *testing.T) {
 			`<script src="https://ads.tracker.com/serve.js"></script>` +
 			`</head><body>` +
 			`<div class="ad-banner">Ad</div>` +
+			`<img class="tracking">` +
 			`<p>Content</p>` +
 			`</body></html>`))
 	})
@@ -2266,7 +2267,7 @@ func TestStatsHeaderOnModifiedHTML(t *testing.T) {
 	if got == "" {
 		t.Fatal("X-Ublproxy-Stats header missing on modified HTML response")
 	}
-	// 2 CSS selectors hidden, 1 script stripped
+	// 2 CSS selectors hidden (both classes present in HTML), 1 script stripped
 	want := "hidden=2; stripped=1"
 	if got != want {
 		t.Errorf("X-Ublproxy-Stats = %q, want %q", got, want)
