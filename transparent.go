@@ -509,9 +509,15 @@ func handleTransparentPortalTLS(conn net.Conn, br *bufio.Reader, proxy *proxyHan
 
 	conn.SetDeadline(time.Time{})
 
-	// Serve portal pages over the TLS connection
+	// Serve portal pages over the TLS connection.
+	// singleConnListener blocks the second Accept until the wrapped
+	// connection is closed (client disconnect or idle timeout), so
+	// Serve doesn't return before the response is fully written.
 	portalH := &portalHandler{proxy: proxy, api: proxy.api}
-	server := http.Server{Handler: portalH}
+	server := http.Server{
+		Handler:     portalH,
+		IdleTimeout: 5 * time.Second,
+	}
 	serverConn := &singleConnListener{conn: tlsConn}
 	server.Serve(serverConn)
 }
@@ -581,25 +587,43 @@ func (c *replayConn) Read(p []byte) (int, error) {
 }
 
 // singleConnListener is a net.Listener that serves exactly one connection.
-// Used to serve HTTP over an already-established TLS connection.
+// The first Accept returns a tracked wrapper; the second Accept blocks
+// until that connection is closed, then returns an error so Serve exits
+// cleanly after the request is fully handled.
 type singleConnListener struct {
 	conn net.Conn
 	once sync.Once
+	done chan struct{}
 }
 
 func (l *singleConnListener) Accept() (net.Conn, error) {
-	var conn net.Conn
+	var first bool
 	l.once.Do(func() {
-		conn = l.conn
+		first = true
+		l.done = make(chan struct{})
 	})
-	if conn != nil {
-		return conn, nil
+	if first {
+		return &notifyCloseConn{Conn: l.conn, done: l.done}, nil
 	}
+	<-l.done
 	return nil, errors.New("listener closed")
 }
 
 func (l *singleConnListener) Close() error   { return nil }
 func (l *singleConnListener) Addr() net.Addr { return l.conn.LocalAddr() }
+
+// notifyCloseConn wraps a net.Conn and signals a channel when closed.
+type notifyCloseConn struct {
+	net.Conn
+	done      chan struct{}
+	closeOnce sync.Once
+}
+
+func (c *notifyCloseConn) Close() error {
+	err := c.Conn.Close()
+	c.closeOnce.Do(func() { close(c.done) })
+	return err
+}
 
 // startTransparentHTTP starts the HTTP server for transparent proxy mode.
 // It intercepts plain HTTP traffic, serves captive portal for untrusted

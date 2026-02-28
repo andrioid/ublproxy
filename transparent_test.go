@@ -554,6 +554,248 @@ func TestTransparentHTTPPortalAccess(t *testing.T) {
 	}
 }
 
+// --- Transparent HTTPS portal access ---
+
+func TestTransparentHTTPSPortalAccess(t *testing.T) {
+	env := startTransparentTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be reached for portal access")
+	}), nil)
+	env.serveTransparentHTTPS(t)
+
+	// Connect with SNI matching the portal hostname — the proxy should
+	// serve the management portal instead of proxying to upstream.
+	conn, err := net.DialTimeout("tcp", env.proxyListener.Addr().String(), 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer conn.Close()
+
+	tlsConn := tls.Client(conn, &tls.Config{
+		ServerName: env.portalHost,
+		RootCAs:    env.caPool,
+	})
+	if err := tlsConn.Handshake(); err != nil {
+		t.Fatalf("TLS handshake: %v", err)
+	}
+	defer tlsConn.Close()
+
+	// Request the portal index page
+	req, _ := http.NewRequest("GET", "https://"+env.portalHost+"/", nil)
+	if err := req.Write(tlsConn); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+
+	resp, err := http.ReadResponse(bufio.NewReader(tlsConn), req)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "ublproxy") {
+		t.Errorf("portal page should contain 'ublproxy', got %q", string(body[:min(len(body), 200)]))
+	}
+}
+
+// --- URL-level blocking in transparent mode ---
+
+func TestTransparentHTTPSBlocksByURLPattern(t *testing.T) {
+	var requestPaths []string
+
+	rs := blocklist.NewRuleSet()
+	rs.AddRule("/ads/tracking.js")
+
+	env := startTransparentTestEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPaths = append(requestPaths, r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("upstream response"))
+	}), rs)
+
+	sniHost := "urlblock.example.com"
+	upstreamAddr := env.upstream.Listener.Addr().String()
+	_, upstreamPort, _ := net.SplitHostPort(upstreamAddr)
+
+	env.proxy.transport.DialContext = func(_ context.Context, network, addr string) (net.Conn, error) {
+		h, _, _ := net.SplitHostPort(addr)
+		if h == sniHost {
+			return net.DialTimeout(network, upstreamAddr, 5*time.Second)
+		}
+		return net.DialTimeout(network, addr, 5*time.Second)
+	}
+
+	env.serveTransparentHTTPS(t)
+
+	conn, err := net.DialTimeout("tcp", env.proxyListener.Addr().String(), 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer conn.Close()
+
+	tlsConn := tls.Client(conn, &tls.Config{
+		ServerName: sniHost,
+		RootCAs:    env.caPool,
+	})
+	defer tlsConn.Close()
+
+	hostPort := net.JoinHostPort(sniHost, upstreamPort)
+	br := bufio.NewReader(tlsConn)
+
+	// Non-matching path should pass through
+	req1, _ := http.NewRequest("GET", fmt.Sprintf("https://%s/page.html", hostPort), nil)
+	req1.Host = hostPort
+	if err := req1.Write(tlsConn); err != nil {
+		t.Fatalf("write request 1: %v", err)
+	}
+	resp1, err := http.ReadResponse(br, req1)
+	if err != nil {
+		t.Fatalf("read response 1: %v", err)
+	}
+	io.Copy(io.Discard, resp1.Body)
+	resp1.Body.Close()
+
+	if resp1.StatusCode != http.StatusOK {
+		t.Errorf("page.html: status = %d, want %d", resp1.StatusCode, http.StatusOK)
+	}
+
+	// Matching URL pattern should be blocked inside the MITM tunnel
+	req2, _ := http.NewRequest("GET", fmt.Sprintf("https://%s/ads/tracking.js", hostPort), nil)
+	req2.Host = hostPort
+	if err := req2.Write(tlsConn); err != nil {
+		t.Fatalf("write request 2: %v", err)
+	}
+	resp2, err := http.ReadResponse(br, req2)
+	if err != nil {
+		t.Fatalf("read response 2: %v", err)
+	}
+	io.Copy(io.Discard, resp2.Body)
+	resp2.Body.Close()
+
+	if resp2.StatusCode != http.StatusNoContent {
+		t.Errorf("tracking.js: status = %d, want %d", resp2.StatusCode, http.StatusNoContent)
+	}
+
+	// Only the allowed request should have reached upstream
+	if len(requestPaths) != 1 || requestPaths[0] != "/page.html" {
+		t.Errorf("upstream received %v, want [/page.html]", requestPaths)
+	}
+}
+
+func TestTransparentHTTPBlocksByURLPattern(t *testing.T) {
+	var requestPaths []string
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPaths = append(requestPaths, r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("upstream response"))
+	}))
+	defer upstream.Close()
+
+	rs := blocklist.NewRuleSet()
+	rs.AddRule("/ads/tracking.js")
+
+	env := startTransparentHTTPTestEnv(t)
+	env.proxy.baselineRules.Store(rs)
+
+	upstreamHost := strings.TrimPrefix(upstream.URL, "http://")
+
+	// Non-matching path should pass through
+	req1, _ := http.NewRequest("GET", env.server.URL+"/page.html", nil)
+	req1.Host = upstreamHost
+
+	resp1, err := http.DefaultClient.Do(req1)
+	if err != nil {
+		t.Fatalf("GET /page.html: %v", err)
+	}
+	io.Copy(io.Discard, resp1.Body)
+	resp1.Body.Close()
+
+	if resp1.StatusCode != http.StatusOK {
+		t.Errorf("page.html: status = %d, want %d", resp1.StatusCode, http.StatusOK)
+	}
+
+	// Matching URL pattern should be blocked
+	req2, _ := http.NewRequest("GET", env.server.URL+"/ads/tracking.js", nil)
+	req2.Host = upstreamHost
+
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("GET /ads/tracking.js: %v", err)
+	}
+	io.Copy(io.Discard, resp2.Body)
+	resp2.Body.Close()
+
+	if resp2.StatusCode != http.StatusNoContent {
+		t.Errorf("tracking.js: status = %d, want %d", resp2.StatusCode, http.StatusNoContent)
+	}
+
+	// Only the allowed request should have reached upstream
+	if len(requestPaths) != 1 || requestPaths[0] != "/page.html" {
+		t.Errorf("upstream received %v, want [/page.html]", requestPaths)
+	}
+}
+
+// --- WebSocket in transparent HTTP mode ---
+
+func TestTransparentHTTPWebSocketUpgrade(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(wsEchoHandler))
+	defer upstream.Close()
+
+	env := startTransparentHTTPTestEnv(t)
+	upstreamHost := strings.TrimPrefix(upstream.URL, "http://")
+
+	// Connect raw TCP to the transparent HTTP test server and perform
+	// a WebSocket upgrade with Host header pointing at the upstream.
+	serverHost := strings.TrimPrefix(env.server.URL, "http://")
+	conn, err := net.DialTimeout("tcp", serverHost, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	// Send WebSocket upgrade request
+	wsKey := "dGhlIHNhbXBsZSBub25jZQ=="
+	reqStr := fmt.Sprintf(
+		"GET /ws HTTP/1.1\r\n"+
+			"Host: %s\r\n"+
+			"Upgrade: websocket\r\n"+
+			"Connection: Upgrade\r\n"+
+			"Sec-WebSocket-Key: %s\r\n"+
+			"Sec-WebSocket-Version: 13\r\n"+
+			"\r\n",
+		upstreamHost, wsKey)
+	if _, err := conn.Write([]byte(reqStr)); err != nil {
+		t.Fatalf("write upgrade: %v", err)
+	}
+
+	// Read the 101 response
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusSwitchingProtocols)
+	}
+
+	// Send a masked WebSocket text frame and read the echo back
+	payload := []byte("hello transparent websocket")
+	if err := writeMaskedWSFrame(conn, payload); err != nil {
+		t.Fatalf("write frame: %v", err)
+	}
+
+	frame, err := readWSFrame(br)
+	if err != nil {
+		t.Fatalf("read frame: %v", err)
+	}
+	if string(frame.payload) != string(payload) {
+		t.Errorf("frame payload = %q, want %q", frame.payload, payload)
+	}
+}
+
 // --- CA trust tracker tests ---
 
 func TestCATrustTracker(t *testing.T) {
