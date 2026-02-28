@@ -273,9 +273,7 @@ func (h *transparentHTTPHandler) servePortal(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if r.URL.Path == "/" || r.URL.Path == "/setup" {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		setupTmpl.Execute(w, setupData{
+		servePage(w, setupTmpl, setupData{
 			PortalURL:   h.proxy.portalOrigin,
 			HttpOrigin:  h.proxy.httpOrigin,
 			Transparent: true,

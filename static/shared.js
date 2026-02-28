@@ -180,6 +180,53 @@
     }
   }
 
+  // --- Auth gating ---
+  // Checks session and toggles #auth-view / #unauth-view / #forbidden-view.
+  // opts.requireAdmin: if true, shows #forbidden-view for non-admin users.
+  // opts.onUnauth: optional callback when user is not authenticated (e.g. clear intervals).
+  function authGate(onReady, opts) {
+    opts = opts || {};
+    checkSession(
+      function onAuth() {
+        if (opts.requireAdmin && !_isAdmin) {
+          hide(document.getElementById('auth-view'));
+          hide(document.getElementById('unauth-view'));
+          show(document.getElementById('forbidden-view'));
+          return;
+        }
+        show(document.getElementById('auth-view'));
+        hide(document.getElementById('unauth-view'));
+        var forbidden = document.getElementById('forbidden-view');
+        if (forbidden) hide(forbidden);
+        if (onReady) onReady();
+      },
+      function onUnauth() {
+        hide(document.getElementById('auth-view'));
+        var forbidden = document.getElementById('forbidden-view');
+        if (forbidden) hide(forbidden);
+        show(document.getElementById('unauth-view'));
+        if (opts.onUnauth) opts.onUnauth();
+      }
+    );
+  }
+
+  // --- API helpers ---
+  async function apiPatch(path, body) {
+    try {
+      await fetch(path, {
+        method: 'PATCH', headers: authHeaders(), body: JSON.stringify(body)
+      });
+    } catch (_) {}
+  }
+
+  function createToggle(checked, onChange) {
+    var toggle = document.createElement('label');
+    toggle.className = 'toggle';
+    toggle.innerHTML = '<input type="checkbox"' + (checked ? ' checked' : '') + '><span class="toggle-slider"></span>';
+    toggle.querySelector('input').addEventListener('change', function() { onChange(this.checked); });
+    return toggle;
+  }
+
   // --- Logout ---
   async function logout() {
     try {
@@ -203,10 +250,13 @@
     showMsg: showMsg,
     clearMsg: clearMsg,
     checkSession: checkSession,
+    authGate: authGate,
     isAdmin: isAdmin,
     register: register,
     login: login,
     logout: logout,
+    apiPatch: apiPatch,
+    createToggle: createToggle,
     initNav: initNav
   };
 

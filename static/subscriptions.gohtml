@@ -7,20 +7,7 @@
 <link rel="stylesheet" href="/static/shared.css">
 </head>
 <body>
-<nav class="nav">
-  <a href="/" class="nav-brand">ublproxy</a>
-  <ul class="nav-links">
-    <li><a href="/" class="nav-link">Dashboard</a></li>
-    <li><a href="/rules" class="nav-link" data-auth>Rules</a></li>
-    <li><a href="/subscriptions" class="nav-link" data-auth>Subscriptions</a></li>
-    <li><a href="/activity" class="nav-link" data-admin>Activity</a></li>
-    <li><a href="/users" class="nav-link" data-admin>Users</a></li>
-  </ul>
-  <div class="nav-right">
-    <span class="nav-status" id="nav-status">Checking&hellip;</span>
-    <a href="#" class="btn btn-ghost btn-sm hidden" id="nav-logout">Sign out</a>
-  </div>
-</nav>
+{{ template "nav" }}
 
 <main class="main">
   <div id="unauth-view" class="hidden">
@@ -87,17 +74,6 @@
   var subUrl = document.getElementById('sub-url');
   var subName = document.getElementById('sub-name');
 
-  function onAuth() {
-    U.show(document.getElementById('auth-view'));
-    U.hide(document.getElementById('unauth-view'));
-    loadSubscriptions();
-  }
-
-  function onUnauth() {
-    U.hide(document.getElementById('auth-view'));
-    U.show(document.getElementById('unauth-view'));
-  }
-
   async function loadSubscriptions() {
     try {
       var resp = await fetch('/api/subscriptions', { headers: U.authHeaders() });
@@ -121,10 +97,7 @@
       var li = document.createElement('li');
       li.className = 'item';
 
-      var toggle = document.createElement('label');
-      toggle.className = 'toggle';
-      toggle.innerHTML = '<input type="checkbox"' + (s.enabled ? ' checked' : '') + '><span class="toggle-slider"></span>';
-      toggle.querySelector('input').addEventListener('change', function() { toggleSubscription(s.id, this.checked); });
+      var toggle = U.createToggle(s.enabled, function(checked) { toggleSubscription(s.id, checked); });
 
       var info = document.createElement('div');
       info.className = 'item-info';
@@ -170,12 +143,8 @@
     }
   }
 
-  async function toggleSubscription(id, enabled) {
-    try {
-      await fetch('/api/subscriptions/' + id, {
-        method: 'PATCH', headers: U.authHeaders(), body: JSON.stringify({ enabled: enabled })
-      });
-    } catch (_) {}
+  function toggleSubscription(id, enabled) {
+    U.apiPatch('/api/subscriptions/' + id, { enabled: enabled });
   }
 
   async function deleteSubscription(id) {
@@ -217,7 +186,7 @@
     });
   });
 
-  U.checkSession(onAuth, onUnauth);
+  U.authGate(loadSubscriptions);
 })();
 </script>
 </body>

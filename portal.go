@@ -13,19 +13,22 @@ import (
 	"ublproxy/internal/mobileconfig"
 )
 
-//go:embed static/portal.html
+//go:embed static/nav.gohtml
+var navHTML string
+
+//go:embed static/portal.gohtml
 var portalHTML string
 
-//go:embed static/rules.html
+//go:embed static/rules.gohtml
 var rulesHTML string
 
-//go:embed static/subscriptions.html
+//go:embed static/subscriptions.gohtml
 var subscriptionsHTML string
 
-//go:embed static/activity.html
+//go:embed static/activity.gohtml
 var activityHTML string
 
-//go:embed static/users.html
+//go:embed static/users.gohtml
 var usersHTML string
 
 //go:embed static/shared.css
@@ -34,10 +37,24 @@ var sharedCSS string
 //go:embed static/shared.js
 var sharedJS string
 
-//go:embed static/setup.html
+//go:embed static/setup.gohtml
 var setupHTML string
 
-var setupTmpl = template.Must(template.New("setup").Parse(setupHTML))
+// parsePageTemplate parses an HTML page template together with the
+// shared nav fragment so {{ template "nav" }} resolves in every page.
+func parsePageTemplate(name, content string) *template.Template {
+	t := template.Must(template.New(name).Parse(navHTML))
+	return template.Must(t.Parse(content))
+}
+
+var (
+	portalTmpl        = parsePageTemplate("portal", portalHTML)
+	rulesTmpl         = parsePageTemplate("rules", rulesHTML)
+	subscriptionsTmpl = parsePageTemplate("subscriptions", subscriptionsHTML)
+	activityTmpl      = parsePageTemplate("activity", activityHTML)
+	usersTmpl         = parsePageTemplate("users", usersHTML)
+	setupTmpl         = parsePageTemplate("setup", setupHTML)
+)
 
 // staticFiles maps /static/* paths to their embedded content and MIME type.
 var staticFiles = map[string]struct {
@@ -113,9 +130,7 @@ func (s *setupHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/" || r.URL.Path == "/setup" {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		setupTmpl.Execute(w, setupData{PortalURL: s.portalOrigin, HttpOrigin: s.httpOrigin})
+		servePage(w, setupTmpl, setupData{PortalURL: s.portalOrigin, HttpOrigin: s.httpOrigin})
 		return
 	}
 	http.NotFound(w, r)
@@ -288,36 +303,34 @@ func (p *proxyHandler) handleMobilePAC(w http.ResponseWriter, r *http.Request) {
 	pacTmpl.Execute(w, pacData{ProxyDirective: "PROXY", ProxyHost: parsed.Host})
 }
 
-func serveHTML(w http.ResponseWriter, content string) {
+func servePage(w http.ResponseWriter, tmpl *template.Template, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(content))
+	tmpl.Execute(w, data)
 }
 
 func (p *proxyHandler) handlePortalIndex(w http.ResponseWriter, r *http.Request) {
-	serveHTML(w, portalHTML)
+	servePage(w, portalTmpl, nil)
 }
 
 func (p *proxyHandler) handlePortalRules(w http.ResponseWriter, r *http.Request) {
-	serveHTML(w, rulesHTML)
+	servePage(w, rulesTmpl, nil)
 }
 
 func (p *proxyHandler) handlePortalSubscriptions(w http.ResponseWriter, r *http.Request) {
-	serveHTML(w, subscriptionsHTML)
+	servePage(w, subscriptionsTmpl, nil)
 }
 
 func (p *proxyHandler) handlePortalActivity(w http.ResponseWriter, r *http.Request) {
-	serveHTML(w, activityHTML)
+	servePage(w, activityTmpl, nil)
 }
 
 func (p *proxyHandler) handlePortalUsers(w http.ResponseWriter, r *http.Request) {
-	serveHTML(w, usersHTML)
+	servePage(w, usersTmpl, nil)
 }
 
 func (p *proxyHandler) handleSetup(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	setupTmpl.Execute(w, setupData{PortalURL: p.portalOrigin, HttpOrigin: p.httpOrigin})
+	servePage(w, setupTmpl, setupData{PortalURL: p.portalOrigin, HttpOrigin: p.httpOrigin})
 }
 
 func (p *proxyHandler) handleMobileconfig(w http.ResponseWriter, r *http.Request) {

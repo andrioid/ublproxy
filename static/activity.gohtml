@@ -7,20 +7,7 @@
 <link rel="stylesheet" href="/static/shared.css">
 </head>
 <body>
-<nav class="nav">
-  <a href="/" class="nav-brand">ublproxy</a>
-  <ul class="nav-links">
-    <li><a href="/" class="nav-link">Dashboard</a></li>
-    <li><a href="/rules" class="nav-link" data-auth>Rules</a></li>
-    <li><a href="/subscriptions" class="nav-link" data-auth>Subscriptions</a></li>
-    <li><a href="/activity" class="nav-link" data-admin>Activity</a></li>
-    <li><a href="/users" class="nav-link" data-admin>Users</a></li>
-  </ul>
-  <div class="nav-right">
-    <span class="nav-status" id="nav-status">Checking&hellip;</span>
-    <a href="#" class="btn btn-ghost btn-sm hidden" id="nav-logout">Sign out</a>
-  </div>
-</nav>
+{{ template "nav" }}
 
 <main class="main">
   <div id="unauth-view" class="hidden">
@@ -66,27 +53,6 @@
   var activeFilter = 'all';
   var refreshTimer = null;
   var allEntries = [];
-
-  function onAuth() {
-    if (!U.isAdmin()) {
-      U.hide(document.getElementById('auth-view'));
-      U.hide(document.getElementById('unauth-view'));
-      U.show(document.getElementById('forbidden-view'));
-      return;
-    }
-    U.show(document.getElementById('auth-view'));
-    U.hide(document.getElementById('unauth-view'));
-    U.hide(document.getElementById('forbidden-view'));
-    loadActivity();
-    refreshTimer = setInterval(loadActivity, 5000);
-  }
-
-  function onUnauth() {
-    U.hide(document.getElementById('auth-view'));
-    U.hide(document.getElementById('forbidden-view'));
-    U.show(document.getElementById('unauth-view'));
-    if (refreshTimer) clearInterval(refreshTimer);
-  }
 
   async function loadActivity() {
     try {
@@ -175,7 +141,13 @@
     });
   });
 
-  U.checkSession(onAuth, onUnauth);
+  U.authGate(function() {
+    loadActivity();
+    refreshTimer = setInterval(loadActivity, 5000);
+  }, {
+    requireAdmin: true,
+    onUnauth: function() { if (refreshTimer) clearInterval(refreshTimer); }
+  });
 })();
 </script>
 </body>
