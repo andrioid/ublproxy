@@ -189,11 +189,12 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port, clientI
 
 		// Replace ad elements in HTML responses (skip HEAD — no body to modify)
 		if req.Method != http.MethodHead {
-			if modified, ok := p.applyElementHiding(resp, host, clientIP, insecure); ok {
+			if modified, stats := p.applyElementHiding(resp, host, clientIP, insecure); stats.Modified {
 				resp.Body.Close()
 				resp.Body = io.NopCloser(bytes.NewReader(modified))
 				resp.ContentLength = int64(len(modified))
 				resp.Header.Del("Content-Length")
+				resp.Header.Set(statsHeaderName, stats.header())
 			}
 		}
 

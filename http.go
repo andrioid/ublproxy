@@ -92,10 +92,11 @@ func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// bootstrap script injection to avoid leaking the session token.
 	insecure := r.TLS == nil
 	if r.Method != http.MethodHead {
-		if modified, ok := p.applyElementHiding(resp, r.URL.Hostname(), clientIP, insecure); ok {
+		if modified, stats := p.applyElementHiding(resp, r.URL.Hostname(), clientIP, insecure); stats.Modified {
 			copyHeaders(w.Header(), resp.Header)
 			removeHopByHopHeaders(w.Header())
 			w.Header().Del("Content-Length")
+			w.Header().Set(statsHeaderName, stats.header())
 			w.WriteHeader(resp.StatusCode)
 			w.Write(modified)
 			logRequest(r.Method, r.URL.String(), resp.StatusCode, time.Since(start), clientIP, credID)

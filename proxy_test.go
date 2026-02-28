@@ -2234,6 +2234,99 @@ func TestHTTPPortConnect(t *testing.T) {
 	}
 }
 
+func TestStatsHeaderOnModifiedHTML(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("##.ad-banner")
+	rs.AddLine("##.tracking")
+	rs.AddLine("||ads.tracker.com^")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head>` +
+			`<script src="https://ads.tracker.com/serve.js"></script>` +
+			`</head><body>` +
+			`<div class="ad-banner">Ad</div>` +
+			`<p>Content</p>` +
+			`</body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	// HTTP proxy path
+	resp, err := client.Get(env.httpURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	io.ReadAll(resp.Body)
+
+	got := resp.Header.Get(statsHeaderName)
+	if got == "" {
+		t.Fatal("X-Ublproxy-Stats header missing on modified HTML response")
+	}
+	// 2 CSS selectors hidden, 1 script stripped
+	want := "hidden=2; stripped=1"
+	if got != want {
+		t.Errorf("X-Ublproxy-Stats = %q, want %q", got, want)
+	}
+}
+
+func TestStatsHeaderOnHTTPSModifiedHTML(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("##.ad-banner")
+
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head></head><body><div class="ad-banner">Ad</div></body></html>`))
+	})
+
+	env := startTestEnv(t, upstream, rs)
+	client := env.httpClient(t)
+
+	// HTTPS proxy path (through CONNECT tunnel)
+	resp, err := client.Get(env.httpsURL + "/page.html")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	io.ReadAll(resp.Body)
+
+	got := resp.Header.Get(statsHeaderName)
+	if got == "" {
+		t.Fatal("X-Ublproxy-Stats header missing on HTTPS modified HTML response")
+	}
+	want := "hidden=1; stripped=0"
+	if got != want {
+		t.Errorf("X-Ublproxy-Stats = %q, want %q", got, want)
+	}
+}
+
+func TestStatsHeaderAbsentOnUnmodifiedResponse(t *testing.T) {
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	})
+
+	env := startTestEnv(t, upstream, nil)
+	client := env.httpClient(t)
+
+	resp, err := client.Get(env.httpURL + "/api/data")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	io.ReadAll(resp.Body)
+
+	// No rules, no modification, no header
+	if got := resp.Header.Get(statsHeaderName); got != "" {
+		t.Errorf("X-Ublproxy-Stats should be absent on unmodified response, got %q", got)
+	}
+}
+
 func TestNoBootstrapInjectionOnInsecureProxy(t *testing.T) {
 	sm := newSessionMap()
 	sm.Set("127.0.0.1", sessionEntry{Token: "secret-token", CredentialID: "cred-1"})
@@ -2251,8 +2344,8 @@ func TestNoBootstrapInjectionOnInsecureProxy(t *testing.T) {
 	}
 
 	// With insecure=true (plain HTTP proxy), bootstrap script should NOT be injected
-	modified, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1", true)
-	if ok {
+	modified, stats := p.applyElementHiding(resp, "example.com", "127.0.0.1", true)
+	if stats.Modified {
 		body := string(modified)
 		if strings.Contains(body, "secret-token") {
 			t.Error("session token must not be injected on insecure connections")
@@ -2268,8 +2361,8 @@ func TestNoBootstrapInjectionOnInsecureProxy(t *testing.T) {
 		Header:     http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
 		Body:       io.NopCloser(strings.NewReader(htmlBody)),
 	}
-	modified2, ok2 := p.applyElementHiding(resp2, "example.com", "127.0.0.1", false)
-	if !ok2 {
+	modified2, stats2 := p.applyElementHiding(resp2, "example.com", "127.0.0.1", false)
+	if !stats2.Modified {
 		t.Fatal("expected modification on secure connection")
 	}
 	body2 := string(modified2)

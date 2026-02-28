@@ -329,10 +329,11 @@ func (h *transparentHTTPHandler) forwardHTTP(w http.ResponseWriter, r *http.Requ
 
 	insecure := true // transparent HTTP is always insecure
 	if r.Method != http.MethodHead {
-		if modified, ok := h.proxy.applyElementHiding(resp, host, clientIP, insecure); ok {
+		if modified, stats := h.proxy.applyElementHiding(resp, host, clientIP, insecure); stats.Modified {
 			copyHeaders(w.Header(), resp.Header)
 			removeHopByHopHeaders(w.Header())
 			w.Header().Del("Content-Length")
+			w.Header().Set(statsHeaderName, stats.header())
 			w.WriteHeader(resp.StatusCode)
 			w.Write(modified)
 			logRequest(r.Method, targetURL, resp.StatusCode, time.Since(start), clientIP, credID)

@@ -77,8 +77,8 @@ func TestScriptInjectionInHTML(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader(htmlBody)),
 	}
 
-	modified, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
-	if !ok {
+	modified, stats := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
+	if !stats.Modified {
 		t.Fatal("expected modification")
 	}
 
@@ -116,8 +116,8 @@ func TestNoScriptInjectionWithoutSession(t *testing.T) {
 	}
 
 	// No rules and no session -> no modification
-	_, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
-	if ok {
+	_, stats := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
+	if stats.Modified {
 		t.Error("should not modify HTML when there's no session and no rules")
 	}
 }
@@ -146,8 +146,8 @@ func TestScriptInjectionWithGzip(t *testing.T) {
 		Body: io.NopCloser(&buf),
 	}
 
-	modified, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
-	if !ok {
+	modified, stats := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
+	if !stats.Modified {
 		t.Fatal("expected modification for gzipped HTML")
 	}
 
@@ -177,8 +177,8 @@ func TestScriptInjectionWithRules(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader(htmlBody)),
 	}
 
-	modified, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
-	if !ok {
+	modified, stats := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
+	if !stats.Modified {
 		t.Fatal("expected modification")
 	}
 
@@ -261,8 +261,8 @@ func TestScriptInjectionWithZstd(t *testing.T) {
 		Body: io.NopCloser(bytes.NewReader(compressed)),
 	}
 
-	modified, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
-	if !ok {
+	modified, stats := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
+	if !stats.Modified {
 		t.Fatal("expected modification for zstd-compressed HTML")
 	}
 
@@ -272,5 +272,117 @@ func TestScriptInjectionWithZstd(t *testing.T) {
 	}
 	if !strings.Contains(body, "Zstd Compressed") {
 		t.Error("should contain the original HTML content")
+	}
+}
+
+func TestElementHidingStatsCountsSelectors(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("##.ad-banner")
+	rs.AddLine("##.tracking-pixel")
+	rs.AddLine("##.sponsored")
+
+	p := &proxyHandler{sessions: newSessionMap()}
+	p.baselineRules.Store(rs)
+
+	htmlBody := `<html><head></head><body><p>Content</p></body></html>`
+	resp := &http.Response{
+		StatusCode: 200,
+		Header:     http.Header{"Content-Type": []string{"text/html"}},
+		Body:       io.NopCloser(strings.NewReader(htmlBody)),
+	}
+
+	_, stats := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
+	if !stats.Modified {
+		t.Fatal("expected modification")
+	}
+	if stats.Hidden != 3 {
+		t.Errorf("Hidden = %d, want 3", stats.Hidden)
+	}
+	if stats.Stripped != 0 {
+		t.Errorf("Stripped = %d, want 0", stats.Stripped)
+	}
+}
+
+func TestElementHidingStatsCountsStripped(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.example.com^")
+	rs.AddLine("||tracker.example.com^")
+
+	p := &proxyHandler{sessions: newSessionMap()}
+	p.baselineRules.Store(rs)
+
+	htmlBody := `<html><head>` +
+		`<script src="https://ads.example.com/serve.js"></script>` +
+		`</head><body>` +
+		`<iframe src="https://tracker.example.com/frame"></iframe>` +
+		`<p>Content</p>` +
+		`</body></html>`
+	resp := &http.Response{
+		StatusCode: 200,
+		Header:     http.Header{"Content-Type": []string{"text/html"}},
+		Body:       io.NopCloser(strings.NewReader(htmlBody)),
+	}
+
+	_, stats := p.applyElementHiding(resp, "page.example.com", "127.0.0.1", false)
+	if !stats.Modified {
+		t.Fatal("expected modification")
+	}
+	if stats.Stripped != 2 {
+		t.Errorf("Stripped = %d, want 2", stats.Stripped)
+	}
+}
+
+func TestElementHidingStatsCombined(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("##.ad-banner")
+	rs.AddLine("||ads.example.com^")
+
+	p := &proxyHandler{sessions: newSessionMap()}
+	p.baselineRules.Store(rs)
+
+	htmlBody := `<html><head>` +
+		`<script src="https://ads.example.com/serve.js"></script>` +
+		`</head><body>` +
+		`<div class="ad-banner">Ad</div>` +
+		`<p>Content</p>` +
+		`</body></html>`
+	resp := &http.Response{
+		StatusCode: 200,
+		Header:     http.Header{"Content-Type": []string{"text/html"}},
+		Body:       io.NopCloser(strings.NewReader(htmlBody)),
+	}
+
+	_, stats := p.applyElementHiding(resp, "page.example.com", "127.0.0.1", false)
+	if !stats.Modified {
+		t.Fatal("expected modification")
+	}
+	if stats.Hidden != 1 {
+		t.Errorf("Hidden = %d, want 1", stats.Hidden)
+	}
+	if stats.Stripped != 1 {
+		t.Errorf("Stripped = %d, want 1", stats.Stripped)
+	}
+
+	want := "hidden=1; stripped=1"
+	if got := stats.header(); got != want {
+		t.Errorf("header() = %q, want %q", got, want)
+	}
+}
+
+func TestElementHidingStatsNoModification(t *testing.T) {
+	p := &proxyHandler{sessions: newSessionMap()}
+
+	resp := &http.Response{
+		StatusCode: 200,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+	}
+
+	_, stats := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
+	if stats.Modified {
+		t.Error("should not modify non-HTML response")
+	}
+	if stats.Hidden != 0 || stats.Stripped != 0 {
+		t.Errorf("stats should be zero for unmodified response, got hidden=%d stripped=%d", stats.Hidden, stats.Stripped)
 	}
 }

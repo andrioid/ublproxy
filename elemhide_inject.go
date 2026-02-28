@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	htmlpkg "html"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -15,6 +17,22 @@ import (
 
 	"ublproxy/internal/blocklist"
 )
+
+// statsHeaderName is the response header the proxy adds to every proxied
+// response, reporting how many filtering operations were applied.
+const statsHeaderName = "X-Ublproxy-Stats"
+
+// elementHidingStats reports what the proxy did to an HTML response.
+type elementHidingStats struct {
+	Modified bool // true if the response body was changed
+	Hidden   int  // CSS element-hiding selectors injected
+	Stripped int  // HTML elements (script/iframe/object/embed) removed
+}
+
+// header returns the stats formatted for the X-Ublproxy-Stats response header.
+func (s elementHidingStats) header() string {
+	return fmt.Sprintf("hidden=%d; stripped=%d", s.Hidden, s.Stripped)
+}
 
 // styleCloseRe matches </style in any case — used to prevent XSS via
 // user-created CSS rules that contain a closing </style> tag.
@@ -75,10 +93,10 @@ func (sc srcBlockContext) resolveSrc(src string) string {
 // connection) — the token must not be sent over unencrypted connections.
 // Returns the modified body and true, or nil and false if unmodified.
 // Handles gzip, brotli, and zstd compressed responses transparently.
-func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP string, insecure bool) ([]byte, bool) {
+func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP string, insecure bool) ([]byte, elementHidingStats) {
 	contentType := resp.Header.Get("Content-Type")
 	if !strings.Contains(contentType, "text/html") {
-		return nil, false
+		return nil, elementHidingStats{}
 	}
 
 	baseline := p.getBaselineRules()
@@ -107,7 +125,7 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 
 	// Nothing to do if there are no rules AND no script to inject
 	if baselineEH == nil && userEH == nil && !hasURLRules && scriptTag == "" {
-		return nil, false
+		return nil, elementHidingStats{}
 	}
 
 	var body []byte
@@ -117,7 +135,8 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 	case strings.Contains(encoding, "gzip"):
 		gr, gzErr := gzip.NewReader(resp.Body)
 		if gzErr != nil {
-			return nil, false
+			slog.Warn("elemhide/skip", "reason", "gzip init failed", "host", host, "err", gzErr)
+			return nil, elementHidingStats{}
 		}
 		body, err = io.ReadAll(gr)
 		gr.Close()
@@ -127,23 +146,30 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 		var zr *zstd.Decoder
 		zr, err = zstd.NewReader(resp.Body)
 		if err != nil {
-			return nil, false
+			slog.Warn("elemhide/skip", "reason", "zstd init failed", "host", host, "err", err)
+			return nil, elementHidingStats{}
 		}
 		body, err = io.ReadAll(zr)
 		zr.Close()
 	case encoding == "":
 		body, err = io.ReadAll(resp.Body)
 	default:
-		return nil, false
+		slog.Warn("elemhide/skip", "reason", "unsupported encoding", "encoding", encoding, "host", host)
+		return nil, elementHidingStats{}
 	}
 	if err != nil {
-		return nil, false
+		slog.Warn("elemhide/skip", "reason", "decompression failed", "encoding", encoding, "host", host, "err", err)
+		return nil, elementHidingStats{}
 	}
+
+	var stats elementHidingStats
+	stats.Modified = true
 
 	// For src-based resource stripping, use the layered shouldBlock
 	// approach via a proxy-aware srcBlockContext.
 	sc := srcBlockContext{scheme: "https", host: host, proxy: p, clientIP: clientIP}
-	modified := stripBlockedResources(body, sc)
+	modified, strippedCount := stripBlockedResources(body, sc)
+	stats.Stripped = strippedCount
 
 	// Merge baseline + user element hiding CSS, applying user #@# exceptions
 	css, selectors := mergeElementHidingCSS(baselineEH, userEH, userRS, host)
@@ -151,6 +177,7 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 		safeCSS := styleCloseRe.ReplaceAllString(css, `<\/style`)
 		styleTag := []byte("<style>" + safeCSS + "</style>")
 		modified = injectStyleTag(modified, styleTag)
+		stats.Hidden = len(selectors)
 		rule := truncateRule(strings.Join(selectors, ", "), 80)
 		p.logActivity(ActivityElementHidden, host, "", rule, clientIP, credID)
 		logElementHidden(host, rule, clientIP, credID)
@@ -165,7 +192,7 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 	// The proxy-to-client hop is typically localhost so this is fine.
 	resp.Header.Del("Content-Encoding")
 
-	return modified, true
+	return modified, stats
 }
 
 // mergeElementHidingCSS combines element hiding selectors from baseline and
@@ -212,15 +239,16 @@ func injectBeforeClose(htmlDoc, content []byte, tags ...[]byte) []byte {
 // strip elements (script, iframe, object, embed) whose external resource URL
 // resolves to a blocked address. Other elements are passed through unchanged —
 // element hiding for those is handled by CSS injection only.
-func stripBlockedResources(src []byte, sc srcBlockContext) []byte {
+func stripBlockedResources(src []byte, sc srcBlockContext) ([]byte, int) {
 	if sc.proxy == nil {
-		return src
+		return src, 0
 	}
 
 	var buf bytes.Buffer
 	buf.Grow(len(src))
 
 	tokenizer := html.NewTokenizer(bytes.NewReader(src))
+	stripped := 0
 
 	for {
 		tt := tokenizer.Next()
@@ -228,10 +256,10 @@ func stripBlockedResources(src []byte, sc srcBlockContext) []byte {
 		switch tt {
 		case html.ErrorToken:
 			if tokenizer.Err() == io.EOF {
-				return buf.Bytes()
+				return buf.Bytes(), stripped
 			}
 			buf.Write(tokenizer.Raw())
-			return buf.Bytes()
+			return buf.Bytes(), stripped
 
 		case html.StartTagToken:
 			tn, hasAttr := tokenizer.TagName()
@@ -265,6 +293,7 @@ func stripBlockedResources(src []byte, sc srcBlockContext) []byte {
 			// HTML-encode the URL to prevent breaking out of the comment
 			replacement := "<!-- ublproxy: blocked " + tagNameLower + " " + htmlpkg.EscapeString(urlVal) + " -->"
 			buf.WriteString(replacement)
+			stripped++
 			if !voidElements[tagNameLower] {
 				skipUntilClose(tokenizer, tagNameLower)
 			}
