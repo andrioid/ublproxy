@@ -139,8 +139,9 @@ func (s *setupHandler) handlePAC(w http.ResponseWriter, r *http.Request) {
 }
 
 type setupData struct {
-	PortalURL  string
-	HttpOrigin string
+	PortalURL   string
+	HttpOrigin  string
+	Transparent bool
 }
 
 // handleSetupVerify responds to /api/setup/verify on the HTTPS portal.
