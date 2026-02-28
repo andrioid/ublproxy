@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
+
 	"ublproxy/internal/blocklist"
 )
 
@@ -230,5 +232,45 @@ func TestSessionMap(t *testing.T) {
 	sm.Delete("1.2.3.4")
 	if got := sm.Get("1.2.3.4"); got != nil {
 		t.Errorf("Get after delete = %v, want nil", got)
+	}
+}
+
+func TestScriptInjectionWithZstd(t *testing.T) {
+	sm := newSessionMap()
+	sm.Set("127.0.0.1", sessionEntry{Token: "zstd-token", CredentialID: "cred-1"})
+
+	p := &proxyHandler{
+		sessions:     sm,
+		portalOrigin: "https://127.0.0.1:8443",
+	}
+
+	htmlBody := `<html><body><p>Zstd Compressed</p></body></html>`
+	enc, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed := enc.EncodeAll([]byte(htmlBody), nil)
+	enc.Close()
+
+	resp := &http.Response{
+		StatusCode: 200,
+		Header: http.Header{
+			"Content-Type":     []string{"text/html"},
+			"Content-Encoding": []string{"zstd"},
+		},
+		Body: io.NopCloser(bytes.NewReader(compressed)),
+	}
+
+	modified, ok := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
+	if !ok {
+		t.Fatal("expected modification for zstd-compressed HTML")
+	}
+
+	body := string(modified)
+	if !strings.Contains(body, "zstd-token") {
+		t.Error("should contain the session token in decompressed output")
+	}
+	if !strings.Contains(body, "Zstd Compressed") {
+		t.Error("should contain the original HTML content")
 	}
 }

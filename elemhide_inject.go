@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 	"golang.org/x/net/html"
 
 	"ublproxy/internal/blocklist"
@@ -73,7 +74,7 @@ func (sc srcBlockContext) resolveSrc(src string) string {
 // exists for the client IP, unless insecure is true (plain HTTP proxy
 // connection) — the token must not be sent over unencrypted connections.
 // Returns the modified body and true, or nil and false if unmodified.
-// Handles gzip and brotli compressed responses transparently.
+// Handles gzip, brotli, and zstd compressed responses transparently.
 func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP string, insecure bool) ([]byte, bool) {
 	contentType := resp.Header.Get("Content-Type")
 	if !strings.Contains(contentType, "text/html") {
@@ -122,10 +123,17 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 		gr.Close()
 	case strings.Contains(encoding, "br"):
 		body, err = io.ReadAll(brotli.NewReader(resp.Body))
+	case strings.Contains(encoding, "zstd"):
+		var zr *zstd.Decoder
+		zr, err = zstd.NewReader(resp.Body)
+		if err != nil {
+			return nil, false
+		}
+		body, err = io.ReadAll(zr)
+		zr.Close()
 	case encoding == "":
 		body, err = io.ReadAll(resp.Body)
 	default:
-		// Unknown encoding (e.g. zstd) — pass through unmodified
 		return nil, false
 	}
 	if err != nil {

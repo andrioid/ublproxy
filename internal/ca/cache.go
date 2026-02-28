@@ -12,9 +12,14 @@ import (
 	"time"
 )
 
+type cachedCert struct {
+	cert      *tls.Certificate
+	expiresAt time.Time
+}
+
 type Cache struct {
 	mu    sync.RWMutex
-	certs map[string]*tls.Certificate
+	certs map[string]*cachedCert
 
 	CACert *x509.Certificate
 	caKey  *rsa.PrivateKey
@@ -22,7 +27,7 @@ type Cache struct {
 
 func NewCache(caCert *x509.Certificate, caKey *rsa.PrivateKey) *Cache {
 	return &Cache{
-		certs:  make(map[string]*tls.Certificate),
+		certs:  make(map[string]*cachedCert),
 		CACert: caCert,
 		caKey:  caKey,
 	}
@@ -30,9 +35,9 @@ func NewCache(caCert *x509.Certificate, caKey *rsa.PrivateKey) *Cache {
 
 func (c *Cache) GetCert(host string) (*tls.Certificate, error) {
 	c.mu.RLock()
-	if cert, ok := c.certs[host]; ok {
+	if entry, ok := c.certs[host]; ok && time.Now().Before(entry.expiresAt) {
 		c.mu.RUnlock()
-		return cert, nil
+		return entry.cert, nil
 	}
 	c.mu.RUnlock()
 
@@ -42,7 +47,10 @@ func (c *Cache) GetCert(host string) (*tls.Certificate, error) {
 	}
 
 	c.mu.Lock()
-	c.certs[host] = cert
+	c.certs[host] = &cachedCert{
+		cert:      cert,
+		expiresAt: time.Now().Add(24 * time.Hour),
+	}
 	c.mu.Unlock()
 
 	return cert, nil
