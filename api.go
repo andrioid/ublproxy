@@ -141,6 +141,8 @@ func (a *apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // authenticate extracts and validates the session token from the Authorization
 // header. Returns nil if the token is missing or invalid.
+// On success, ensures the in-memory sessionMap has an entry for this client
+// IP so the proxy can resolve the credential for proxied requests.
 func (a *apiHandler) authenticate(r *http.Request) *store.Session {
 	auth := r.Header.Get("Authorization")
 	if !strings.HasPrefix(auth, "Bearer ") {
@@ -150,6 +152,19 @@ func (a *apiHandler) authenticate(r *http.Request) *store.Session {
 	sess, err := a.store.ValidateSession(token)
 	if err != nil {
 		return nil
+	}
+	// Lazily restore the IP → session mapping. After a server restart the
+	// in-memory sessionMap is empty; re-populating it here means the proxy
+	// knows the user as soon as their browser makes any authenticated API
+	// call (e.g. GET /api/whoami on portal page load).
+	if a.sessions != nil {
+		clientIP := clientIPFromRequest(r)
+		if existing := a.sessions.Get(clientIP); existing == nil || existing.Token != sess.Token {
+			a.sessions.Set(clientIP, sessionEntry{
+				Token:        sess.Token,
+				CredentialID: sess.CredentialID,
+			})
+		}
 	}
 	return sess
 }
