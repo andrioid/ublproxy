@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -164,5 +166,46 @@ func TestFilterSelectorsAgainstHTML(t *testing.T) {
 		if !want[sel] {
 			t.Errorf("unexpected selector in filtered output: %q", sel)
 		}
+	}
+}
+
+func TestBuildElementHidingCSSChunking(t *testing.T) {
+	// Build a selector list larger than maxSelectorsPerRule
+	n := maxSelectorsPerRule + 500
+	selectors := make([]string, n)
+	for i := range selectors {
+		selectors[i] = fmt.Sprintf(".sel-%d", i)
+	}
+
+	css := buildElementHidingCSS(selectors)
+
+	// Should produce 2 rules
+	count := strings.Count(css, "display: none !important")
+	if count != 2 {
+		t.Errorf("expected 2 CSS rules, got %d", count)
+	}
+
+	// First selector and last selector should both be present
+	if !strings.Contains(css, ".sel-0") {
+		t.Error("first selector missing")
+	}
+	if !strings.Contains(css, fmt.Sprintf(".sel-%d", n-1)) {
+		t.Error("last selector missing")
+	}
+}
+
+func TestBuildElementHidingCSSSmallList(t *testing.T) {
+	css := buildElementHidingCSS([]string{".a", ".b", ".c"})
+
+	count := strings.Count(css, "display: none !important")
+	if count != 1 {
+		t.Errorf("expected 1 CSS rule for small list, got %d", count)
+	}
+}
+
+func TestBuildElementHidingCSSEmpty(t *testing.T) {
+	css := buildElementHidingCSS(nil)
+	if css != "" {
+		t.Errorf("expected empty string for nil selectors, got %q", css)
 	}
 }

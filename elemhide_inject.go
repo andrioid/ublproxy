@@ -223,13 +223,31 @@ func mergeElementHidingSelectors(baseline, user *blocklist.ElementHiding, userRS
 	return selectors
 }
 
+// maxSelectorsPerRule limits the number of selectors in a single CSS rule.
+// Chrome truncates rules that exceed its internal selector limit (~4096),
+// silently breaking element hiding. Chunking into multiple rules avoids this.
+const maxSelectorsPerRule = 4096
+
 // buildElementHidingCSS produces a display:none stylesheet from a list of
-// CSS selectors. Returns empty string if the list is empty.
+// CSS selectors. Rules are chunked to stay within browser selector limits.
+// Returns empty string if the list is empty.
 func buildElementHidingCSS(selectors []string) string {
 	if len(selectors) == 0 {
 		return ""
 	}
-	return strings.Join(selectors, ",\n") + " {\n  display: none !important;\n}\n"
+	if len(selectors) <= maxSelectorsPerRule {
+		return strings.Join(selectors, ",\n") + " {\n  display: none !important;\n}\n"
+	}
+	var b strings.Builder
+	for i := 0; i < len(selectors); i += maxSelectorsPerRule {
+		end := i + maxSelectorsPerRule
+		if end > len(selectors) {
+			end = len(selectors)
+		}
+		b.WriteString(strings.Join(selectors[i:end], ",\n"))
+		b.WriteString(" {\n  display: none !important;\n}\n")
+	}
+	return b.String()
 }
 
 // injectBeforeClose inserts content before the first found closing tag,
