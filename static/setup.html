@@ -40,7 +40,7 @@
   <!-- Step 1: Install Certificate -->
   <div class="card wizard-card" id="step-cert">
     <h2 class="card-title" style="margin-bottom:0.75rem">Install Certificate</h2>
-    <p style="margin-bottom:1rem; font-size:0.9rem; color:var(--color-text-muted)">
+    <p style="margin-bottom:1rem; font-size:0.9rem; color:var(--color-text-muted)" id="cert-intro">
       Your device must trust the ublproxy CA certificate before the proxy can
       filter HTTPS traffic. Without it, every HTTPS request through the proxy
       will fail with a certificate error.
@@ -296,18 +296,33 @@
 (function() {
   var portalURL = '{{.PortalURL}}';
   var httpOrigin = '{{.HttpOrigin}}';
+  var transparentMode = {{.Transparent}};
 
-  var steps = ['step-cert', 'step-proxy', 'step-verify', 'step-done'];
+  var steps = transparentMode
+    ? ['step-cert', 'step-verify', 'step-done']
+    : ['step-cert', 'step-proxy', 'step-verify', 'step-done'];
   var currentStep = 0;
 
   // Populate dynamic values
   var pacURL = portalURL + '/proxy.pac';
   var mobilePacURL = httpOrigin + '/mobile.pac';
-  document.getElementById('pac-url').textContent = pacURL;
-  document.getElementById('mobile-pac-url').textContent = mobilePacURL;
+  var pacEl = document.getElementById('pac-url');
+  var mobilePacEl = document.getElementById('mobile-pac-url');
+  if (pacEl) pacEl.textContent = pacURL;
+  if (mobilePacEl) mobilePacEl.textContent = mobilePacURL;
   document.getElementById('portal-link').href = portalURL;
   var chromeFlag = document.getElementById('chrome-flag');
   if (chromeFlag) chromeFlag.textContent = 'chromium --proxy-pac-url=' + pacURL;
+
+  // In transparent mode, update intro text and hide proxy step
+  if (transparentMode) {
+    var intro = document.getElementById('cert-intro');
+    if (intro) {
+      intro.textContent = 'This network uses a transparent proxy for ad-blocking. ' +
+        'Install the CA certificate below so your device trusts the proxy. ' +
+        'No proxy configuration is needed \u2014 traffic is intercepted automatically.';
+    }
+  }
 
   // Platform detection
   var ua = navigator.userAgent;

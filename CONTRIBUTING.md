@@ -54,6 +54,7 @@ mise run dev
 | `--ca-dir` | `UBLPROXY_CA_DIR` | `~/.ublproxy/` | Directory for CA certificate and key |
 | `--db` | `UBLPROXY_DB` | `~/.ublproxy/ublproxy.db` | Path to SQLite database |
 | `--blocklist` | `UBLPROXY_BLOCKLIST` | *(none)* | Path or URL to a blocklist file (repeatable, comma-separated in env var) |
+| `--transparent` | `UBLPROXY_TRANSPARENT` | `false` | Run in transparent proxy mode (intercept redirected traffic) |
 
 On first run, a CA certificate and key are generated in the `--ca-dir` directory. You need to trust the CA certificate (`ca.crt`) in your OS or browser for HTTPS interception to work without warnings. Restart your browser after trusting the certificate.
 
@@ -175,16 +176,60 @@ Tests are fully self-contained — they spin up in-memory CA certificates, local
 
 ## Project structure
 
-Proxy code lives in `package main` in the project root. The `pkg/` directory contains reusable packages.
+Proxy code lives in `package main` in the project root. The `internal/` directory contains packages that are internal to the application.
+
+```mermaid
+graph TB
+    subgraph Main["package main (project root)"]
+        direction TB
+        MAIN["main.go<br/><i>CLI, wiring, startup</i>"]
+        PROXY["proxy.go<br/><i>Rule loading, request dispatch</i>"]
+        CONN["connect.go<br/><i>CONNECT, TLS MITM</i>"]
+        HTTP["http.go<br/><i>HTTP forwarding</i>"]
+        TRANS["transparent.go<br/><i>Transparent proxy, SNI, captive portal</i>"]
+        PORTAL["portal.go / portal_https.go<br/><i>Portal UI, setup wizard</i>"]
+        API["api*.go<br/><i>REST API, WebAuthn, rules, subscriptions</i>"]
+        INJECT["elemhide_inject.go / inject.go<br/><i>CSS + script injection</i>"]
+    end
+
+    subgraph Internal["internal/"]
+        BL["blocklist/<br/><i>Adblock parsing, matching,<br/>element hiding, resource types</i>"]
+        CA["ca/<br/><i>CA generation, cert cache</i>"]
+        ST["store/<br/><i>SQLite persistence</i>"]
+        WA["webauthn/<br/><i>Minimal WebAuthn server</i>"]
+        MC["mobileconfig/<br/><i>Apple .mobileconfig profiles</i>"]
+    end
+
+    subgraph Static["static/ (go:embed)"]
+        UI["portal.html, rules.html,<br/>subscriptions.html, activity.html,<br/>users.html, setup.html"]
+        JS["bootstrap.js, picker.js,<br/>shared.js"]
+        CSS["shared.css"]
+    end
+
+    MAIN --> PROXY
+    PROXY --> CONN
+    PROXY --> HTTP
+    PROXY --> TRANS
+    PROXY --> INJECT
+    MAIN --> PORTAL
+    MAIN --> API
+
+    PROXY --> BL
+    PROXY --> ST
+    CONN --> CA
+    TRANS --> CA
+    API --> WA
+    API --> ST
+    PORTAL --> MC
+```
 
 | File | Responsibility |
 |---|---|
-| `main.go` | CLI flag parsing, wiring, startup |
-| `ca.go` | CA certificate loading, generation, and persistence to disk |
-| `cert.go` | Per-host TLS certificate generation and in-memory cache |
+| `main.go` | CLI flag parsing, wiring, startup (explicit vs transparent mode) |
 | `proxy.go` | Proxy handler, baseline/per-user rule loading, request dispatch |
 | `http.go` | Plain HTTP request forwarding, hop-by-hop header stripping |
-| `connect.go` | CONNECT method handling, TLS MITM, request forwarding |
+| `connect.go` | CONNECT method handling, TLS MITM, passthrough tunneling |
+| `transparent.go` | Transparent proxy: SNI extraction, captive portal, trust tracking |
 | `portal.go` | Portal, setup page, mobile PAC, and QR code serving (embeds static HTML) |
 | `portal_https.go` | HTTPS listener, TLS termination, request routing |
 | `api.go` | API handler, routing, CORS, and auth middleware |
@@ -192,32 +237,19 @@ Proxy code lives in `package main` in the project root. The `pkg/` directory con
 | `api_rules.go` | Per-user blocking rule CRUD API |
 | `api_subscriptions.go` | Per-user blocklist subscription API |
 | `api_activity.go` | Activity log API (recent events and stats) |
+| `api_users.go` | Admin user management API |
 | `activity.go` | In-memory activity log ring buffer |
 | `elemhide_inject.go` | Element hiding CSS injection into HTML responses |
 | `inject.go` | Bootstrap script and picker injection into HTML responses |
 | `websocket.go` | WebSocket upgrade detection and tunnel support |
 | `session_map.go` | Client IP to session/credential mapping |
 | `log.go` | Request and error logging to stderr |
-| `proxy_test.go` | End-to-end proxy tests |
-| `inject_test.go` | Script injection tests |
-| `api_test.go` | API endpoint tests |
-| `pkg/blocklist/` | Blocklist parsing (adblock + hosts-file), hostname matching, element hiding, resource type detection |
-| `pkg/store/` | SQLite persistence for credentials, sessions, rules, subscriptions, and cache |
-| `pkg/webauthn/` | Minimal WebAuthn server (ES256/P-256 with "none" attestation) |
-| `static/portal.html` | Portal dashboard (auth, stats, quick links) |
-| `static/rules.html` | Rules management page (CRUD, search, syntax help) |
-| `static/subscriptions.html` | Subscriptions management (popular lists, add/remove) |
-| `static/activity.html` | Activity feed (filtered, auto-refresh) |
-| `static/shared.css` | Shared design system (CSS custom properties, nav, cards) |
-| `static/shared.js` | Shared auth, WebAuthn, nav helpers |
-| `static/setup.html` | Setup page for CA certificate installation (desktop, iOS, Android) |
-| `static/bootstrap.js` | Injected bootstrap script (keyboard shortcut, picker loader) |
-| `static/picker.js` | Element picker UI (Shadow DOM isolated) |
-| `scripts/build` | Build task |
-| `scripts/test` | Test task |
-| `scripts/dev` | Build + run task for development |
-| `scripts/browser` | Open a Playwright browser through the proxy |
-| `scripts/browser-no-proxy` | Open a Playwright browser without the proxy (for comparison) |
+| `internal/blocklist/` | Blocklist parsing (adblock + hosts-file), hostname matching, element hiding, resource type detection |
+| `internal/ca/` | CA certificate generation, loading, per-host cert cache |
+| `internal/store/` | SQLite persistence for credentials, sessions, rules, subscriptions, and cache |
+| `internal/webauthn/` | Minimal WebAuthn server (ES256/P-256 with "none" attestation) |
+| `internal/mobileconfig/` | Apple .mobileconfig profile generation |
+| `static/` | Embedded HTML, CSS, JS for portal UI, setup wizard, element picker |
 
 ## Code style
 

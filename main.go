@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"net/http"
@@ -73,6 +74,12 @@ func main() {
 				Usage:   "path or URL to a blocklist file (can be specified multiple times)",
 				Sources: cli.EnvVars("UBLPROXY_BLOCKLIST"),
 			},
+			&cli.BoolFlag{
+				Name:    "transparent",
+				Value:   false,
+				Usage:   "run in transparent proxy mode (intercept redirected traffic instead of explicit proxy)",
+				Sources: cli.EnvVars("UBLPROXY_TRANSPARENT"),
+			},
 		},
 		Action: run,
 	}
@@ -91,6 +98,7 @@ func run(_ context.Context, cmd *cli.Command) error {
 	caDir := cmd.String("ca-dir")
 	dbPath := cmd.String("db")
 	blocklistSources := cmd.StringSlice("blocklist")
+	transparent := cmd.Bool("transparent")
 
 	caCert, caKey, err := ca.LoadOrGenerate(caDir)
 	if err != nil {
@@ -133,11 +141,7 @@ func run(_ context.Context, cmd *cli.Command) error {
 		extraIPs = append(extraIPs, net.ParseIP(lanIP))
 	}
 
-	httpsAddr := fmt.Sprintf("%s:%d", addr, httpsPort)
-	portalH := &portalHandler{proxy: handler, api: api}
-	go startPortalHTTPS(httpsAddr, hostname, extraIPs, certs, portalH)
-
-	// For the HTTP origin, prefer the LAN IP over "localhost" since mobile
+	// For the HTTP origin, prefer the LAN IP over "localhost" since
 	// devices need a routable address to reach the proxy.
 	httpHost := hostname
 	if httpHost == "localhost" && len(extraIPs) > 0 {
@@ -146,7 +150,19 @@ func run(_ context.Context, cmd *cli.Command) error {
 	httpOrigin := fmt.Sprintf("http://%s:%d", httpHost, httpPort)
 	handler.httpOrigin = httpOrigin
 
+	httpsAddr := fmt.Sprintf("%s:%d", addr, httpsPort)
 	httpAddr := fmt.Sprintf("%s:%d", addr, httpPort)
+
+	if transparent {
+		return runTransparent(handler, certs, hostname, extraIPs, httpsAddr, httpAddr)
+	}
+	return runExplicitProxy(handler, api, certs, caCert, caCertPEM, hostname, extraIPs, portalOrigin, httpOrigin, httpsAddr, httpAddr)
+}
+
+func runExplicitProxy(handler *proxyHandler, api *apiHandler, certs *ca.Cache, caCert *x509.Certificate, caCertPEM []byte, hostname string, extraIPs []net.IP, portalOrigin, httpOrigin, httpsAddr, httpAddr string) error {
+	portalH := &portalHandler{proxy: handler, api: api}
+	go startPortalHTTPS(httpsAddr, hostname, extraIPs, certs, portalH)
+
 	setupH := &setupHandler{
 		proxy:        handler,
 		caCert:       caCert,
@@ -161,6 +177,16 @@ func run(_ context.Context, cmd *cli.Command) error {
 	if err := http.ListenAndServe(httpAddr, setupH); err != nil {
 		return fmt.Errorf("server error: %w", err)
 	}
+	return nil
+}
+
+func runTransparent(handler *proxyHandler, certs *ca.Cache, hostname string, extraIPs []net.IP, httpsAddr, httpAddr string) error {
+	trustTracker := newCATrustTracker()
+
+	fmt.Fprintf(os.Stderr, "ublproxy running in transparent proxy mode\n")
+
+	go startTransparentHTTPS(httpsAddr, handler, certs, hostname, extraIPs, trustTracker)
+	startTransparentHTTP(httpAddr, handler, trustTracker, hostname)
 	return nil
 }
 
