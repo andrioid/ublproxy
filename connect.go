@@ -17,7 +17,7 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 		host = r.Host
 		port = "443"
 	}
-	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	clientIP := clientIPFromRequest(r)
 	credID := p.credentialForIP(clientIP)
 	if p.shouldBlockHost(clientIP, host) {
 		p.logActivity(ActivityBlocked, host, "", "||"+host+"^", clientIP, credID)

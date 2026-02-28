@@ -110,7 +110,7 @@ func TestLogPassthroughIsDebugLevel(t *testing.T) {
 func TestLogElementHiddenIsDebugLevel(t *testing.T) {
 	// At info level, logElementHidden should produce no output
 	output := withLogCapture(slog.LevelInfo, func() {
-		logElementHidden("example.com", "192.168.1.5", "CredABCD1234")
+		logElementHidden("example.com", ".ad-banner, #sidebar-ad", "192.168.1.5", "CredABCD1234")
 	})
 	if output != "" {
 		t.Errorf("logElementHidden at info level should produce no output, got: %s", output)
@@ -118,7 +118,7 @@ func TestLogElementHiddenIsDebugLevel(t *testing.T) {
 
 	// At debug level, logElementHidden should produce output
 	output = withLogCapture(slog.LevelDebug, func() {
-		logElementHidden("example.com", "192.168.1.5", "CredABCD1234")
+		logElementHidden("example.com", ".ad-banner, #sidebar-ad", "192.168.1.5", "CredABCD1234")
 	})
 	if !strings.Contains(output, "level=DEBUG") {
 		t.Errorf("expected level=DEBUG, got: %s", output)
@@ -128,6 +128,9 @@ func TestLogElementHiddenIsDebugLevel(t *testing.T) {
 	}
 	if !strings.Contains(output, "host=example.com") {
 		t.Errorf("expected host=example.com, got: %s", output)
+	}
+	if !strings.Contains(output, ".ad-banner") {
+		t.Errorf("expected rule to contain .ad-banner, got: %s", output)
 	}
 }
 

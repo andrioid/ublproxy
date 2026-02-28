@@ -83,9 +83,10 @@ func logBlocked(host, url, rule, clientIP, credentialID string) {
 }
 
 // logElementHidden logs a CSS element hiding injection at Debug level.
-func logElementHidden(host, clientIP, credentialID string) {
+func logElementHidden(host, rule, clientIP, credentialID string) {
 	slog.Debug("element-hidden",
 		"host", host,
+		"rule", rule,
 		"ip", clientIP,
 		"user", shortUserID(credentialID),
 	)

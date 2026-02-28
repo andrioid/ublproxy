@@ -1,6 +1,9 @@
 package main
 
-import "sync"
+import (
+	"log/slog"
+	"sync"
+)
 
 // sessionEntry holds the session token and credential ID for an
 // authenticated client. The credential ID identifies the user (passkey)
@@ -28,6 +31,7 @@ func (m *sessionMap) Set(clientIP string, entry sessionEntry) {
 	m.mu.Lock()
 	m.entries[clientIP] = entry
 	m.mu.Unlock()
+	slog.Debug("session stored", "ip", clientIP, "user", shortUserID(entry.CredentialID))
 }
 
 // Get returns the session entry for a client IP, or nil if none.
@@ -36,8 +40,10 @@ func (m *sessionMap) Get(clientIP string) *sessionEntry {
 	entry, ok := m.entries[clientIP]
 	m.mu.RUnlock()
 	if !ok {
+		slog.Debug("session lookup miss", "ip", clientIP)
 		return nil
 	}
+	slog.Debug("session lookup hit", "ip", clientIP, "user", shortUserID(entry.CredentialID))
 	return &entry
 }
 
@@ -46,4 +52,5 @@ func (m *sessionMap) Delete(clientIP string) {
 	m.mu.Lock()
 	delete(m.entries, clientIP)
 	m.mu.Unlock()
+	slog.Debug("session deleted", "ip", clientIP)
 }

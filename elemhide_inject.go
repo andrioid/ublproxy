@@ -146,13 +146,14 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 	modified := stripBlockedResources(body, sc)
 
 	// Merge baseline + user element hiding CSS, applying user #@# exceptions
-	css := mergeElementHidingCSS(baselineEH, userEH, userRS, host)
+	css, selectors := mergeElementHidingCSS(baselineEH, userEH, userRS, host)
 	if css != "" {
 		safeCSS := styleCloseRe.ReplaceAllString(css, `<\/style`)
 		styleTag := []byte("<style>" + safeCSS + "</style>")
 		modified = injectStyleTag(modified, styleTag)
-		p.logActivity(ActivityElementHidden, host, "", "", clientIP, credID)
-		logElementHidden(host, clientIP, credID)
+		rule := strings.Join(selectors, ", ")
+		p.logActivity(ActivityElementHidden, host, "", rule, clientIP, credID)
+		logElementHidden(host, rule, clientIP, credID)
 	}
 
 	// Inject the bootstrap script for the element picker
@@ -170,7 +171,7 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 // mergeElementHidingCSS combines element hiding selectors from baseline and
 // user RuleSets for a specific domain. User #@# exception rules suppress
 // matching baseline ## selectors. Returns empty string if no CSS to inject.
-func mergeElementHidingCSS(baseline, user *blocklist.ElementHiding, userRS *blocklist.RuleSet, domain string) string {
+func mergeElementHidingCSS(baseline, user *blocklist.ElementHiding, userRS *blocklist.RuleSet, domain string) (string, []string) {
 	var selectors []string
 
 	// Add baseline selectors, filtering out any excepted by user #@# rules
@@ -189,10 +190,11 @@ func mergeElementHidingCSS(baseline, user *blocklist.ElementHiding, userRS *bloc
 	}
 
 	if len(selectors) == 0 {
-		return ""
+		return "", nil
 	}
 
-	return strings.Join(selectors, ",\n") + " {\n  display: none !important;\n}\n"
+	css := strings.Join(selectors, ",\n") + " {\n  display: none !important;\n}\n"
+	return css, selectors
 }
 
 // injectBeforeClose inserts content before the first found closing tag,

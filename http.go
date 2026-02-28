@@ -11,12 +11,30 @@ import (
 )
 
 // clientIPFromRequest extracts the IP address from the request's RemoteAddr.
+// The result is normalized so that IPv4-mapped IPv6 addresses (e.g.
+// "::ffff:192.168.1.5") are returned as plain IPv4 ("192.168.1.5").
+// Without this, session lookups can fail when the portal auth request
+// arrives on a different address family than the proxy CONNECT request.
 func clientIPFromRequest(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		return normalizeIP(r.RemoteAddr)
 	}
-	return host
+	return normalizeIP(host)
+}
+
+// normalizeIP parses an IP string and returns its canonical form.
+// IPv4-mapped IPv6 addresses are unwrapped to plain IPv4.
+func normalizeIP(raw string) string {
+	ip := net.ParseIP(raw)
+	if ip == nil {
+		return raw
+	}
+	// Unmap IPv4-mapped IPv6 (e.g. ::ffff:192.168.1.5 -> 192.168.1.5)
+	if v4 := ip.To4(); v4 != nil {
+		return v4.String()
+	}
+	return ip.String()
 }
 
 // Headers that must not be forwarded between hops.

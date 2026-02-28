@@ -439,7 +439,8 @@ func handleTransparentTLSConn(conn net.Conn, proxy *proxyHandler, certs *ca.Cach
 
 	conn.SetDeadline(time.Now().Add(10 * time.Second))
 
-	clientIP, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+	clientIPRaw, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+	clientIP := normalizeIP(clientIPRaw)
 
 	br := bufio.NewReader(conn)
 	sni, err := extractSNI(br)
