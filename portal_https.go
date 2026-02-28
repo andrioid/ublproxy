@@ -70,6 +70,10 @@ func (h *portalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.proxy.handlePortalActivity(w, r)
 		return
 	}
+	if r.URL.Path == "/users" {
+		h.proxy.handlePortalUsers(w, r)
+		return
+	}
 	if serveStaticFile(w, r.URL.Path) {
 		return
 	}

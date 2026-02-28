@@ -140,6 +140,154 @@ func TestSessionExpiry(t *testing.T) {
 	}
 }
 
+func TestFirstCredentialIsAdmin(t *testing.T) {
+	s := testStore(t)
+	pubKey := make([]byte, 65)
+	pubKey[0] = 0x04
+
+	if err := s.SaveCredential("first", pubKey); err != nil {
+		t.Fatalf("SaveCredential(first): %v", err)
+	}
+	if err := s.SaveCredential("second", pubKey); err != nil {
+		t.Fatalf("SaveCredential(second): %v", err)
+	}
+
+	// First credential should be admin
+	isAdmin, err := s.IsAdmin("first")
+	if err != nil {
+		t.Fatalf("IsAdmin(first): %v", err)
+	}
+	if !isAdmin {
+		t.Error("first credential should be admin")
+	}
+
+	// Second credential should not be admin
+	isAdmin, err = s.IsAdmin("second")
+	if err != nil {
+		t.Fatalf("IsAdmin(second): %v", err)
+	}
+	if isAdmin {
+		t.Error("second credential should not be admin")
+	}
+
+	// GetCredential should include admin flag
+	cred, err := s.GetCredential("first")
+	if err != nil {
+		t.Fatalf("GetCredential(first): %v", err)
+	}
+	if !cred.IsAdmin {
+		t.Error("GetCredential(first).IsAdmin should be true")
+	}
+	cred, err = s.GetCredential("second")
+	if err != nil {
+		t.Fatalf("GetCredential(second): %v", err)
+	}
+	if cred.IsAdmin {
+		t.Error("GetCredential(second).IsAdmin should be false")
+	}
+}
+
+func TestSetAdmin(t *testing.T) {
+	s := testStore(t)
+	pubKey := make([]byte, 65)
+	pubKey[0] = 0x04
+
+	s.SaveCredential("cred-1", pubKey)
+	s.SaveCredential("cred-2", pubKey)
+
+	// cred-2 starts as non-admin
+	isAdmin, _ := s.IsAdmin("cred-2")
+	if isAdmin {
+		t.Fatal("cred-2 should start as non-admin")
+	}
+
+	// Promote cred-2
+	if err := s.SetAdmin("cred-2", true); err != nil {
+		t.Fatalf("SetAdmin(cred-2, true): %v", err)
+	}
+	isAdmin, _ = s.IsAdmin("cred-2")
+	if !isAdmin {
+		t.Error("cred-2 should be admin after SetAdmin(true)")
+	}
+
+	// Demote cred-2
+	if err := s.SetAdmin("cred-2", false); err != nil {
+		t.Fatalf("SetAdmin(cred-2, false): %v", err)
+	}
+	isAdmin, _ = s.IsAdmin("cred-2")
+	if isAdmin {
+		t.Error("cred-2 should not be admin after SetAdmin(false)")
+	}
+
+	// SetAdmin on nonexistent credential
+	if err := s.SetAdmin("nonexistent", true); err != sql.ErrNoRows {
+		t.Errorf("SetAdmin(nonexistent) err = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestListCredentials(t *testing.T) {
+	s := testStore(t)
+	pubKey := make([]byte, 65)
+	pubKey[0] = 0x04
+
+	s.SaveCredential("cred-1", pubKey)
+	s.SaveCredential("cred-2", pubKey)
+
+	creds, err := s.ListCredentials()
+	if err != nil {
+		t.Fatalf("ListCredentials: %v", err)
+	}
+	if len(creds) != 2 {
+		t.Fatalf("ListCredentials: got %d, want 2", len(creds))
+	}
+
+	// First credential should be admin
+	var foundAdmin, foundNonAdmin bool
+	for _, c := range creds {
+		if c.ID == "cred-1" && c.IsAdmin {
+			foundAdmin = true
+		}
+		if c.ID == "cred-2" && !c.IsAdmin {
+			foundNonAdmin = true
+		}
+	}
+	if !foundAdmin {
+		t.Error("cred-1 should be admin in ListCredentials")
+	}
+	if !foundNonAdmin {
+		t.Error("cred-2 should not be admin in ListCredentials")
+	}
+}
+
+func TestMigrationPromotesFirstCredential(t *testing.T) {
+	// Simulate an existing database without is_admin column by creating
+	// a database, inserting credentials, then running migrate() again.
+	// The migration should promote the first credential to admin.
+	s := testStore(t)
+	pubKey := make([]byte, 65)
+	pubKey[0] = 0x04
+
+	s.SaveCredential("oldest", pubKey)
+	s.SaveCredential("newest", pubKey)
+
+	// Simulate pre-migration state: reset all admin flags
+	s.db.Exec("UPDATE credentials SET is_admin = 0")
+
+	// Re-run migration
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	isAdmin, _ := s.IsAdmin("oldest")
+	if !isAdmin {
+		t.Error("oldest credential should be promoted to admin by migration")
+	}
+	isAdmin, _ = s.IsAdmin("newest")
+	if isAdmin {
+		t.Error("newest credential should not be promoted by migration")
+	}
+}
+
 func TestRuleCRUD(t *testing.T) {
 	s := testStore(t)
 

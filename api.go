@@ -91,6 +91,12 @@ func (a *apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Whoami: returns admin status for the current session
+	if path == "/whoami" && r.Method == http.MethodGet {
+		a.handleWhoami(w, sess)
+		return
+	}
+
 	// Picker script (served with auth so only authenticated users can load it)
 	if path == "/picker.js" && r.Method == http.MethodGet {
 		a.handlePickerJS(w, r)
@@ -109,13 +115,24 @@ func (a *apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Activity routes
+	// Activity feed (admin only)
 	if path == "/activity" && r.Method == http.MethodGet {
+		if !a.isAdmin(sess) {
+			writeJSON(w, http.StatusForbidden, errorResponse{"admin access required"})
+			return
+		}
 		a.handleActivity(w, r)
 		return
 	}
+	// Activity stats (all authenticated users)
 	if path == "/activity/stats" && r.Method == http.MethodGet {
 		a.handleActivityStats(w, r)
+		return
+	}
+
+	// User management routes (admin only)
+	if strings.HasPrefix(path, "/users") {
+		a.routeUsers(w, r, path, sess)
 		return
 	}
 
@@ -180,6 +197,21 @@ func (a *apiHandler) consumeChallenge(b64 string) (webauthn.Challenge, bool) {
 		return webauthn.Challenge{}, false
 	}
 	return entry.challenge, true
+}
+
+// isAdmin checks whether the session's credential has admin privileges.
+func (a *apiHandler) isAdmin(sess *store.Session) bool {
+	isAdmin, err := a.store.IsAdmin(sess.CredentialID)
+	if err != nil {
+		return false
+	}
+	return isAdmin
+}
+
+// handleWhoami returns the admin status for the current session.
+func (a *apiHandler) handleWhoami(w http.ResponseWriter, sess *store.Session) {
+	isAdmin, _ := a.store.IsAdmin(sess.CredentialID)
+	writeJSON(w, http.StatusOK, map[string]bool{"is_admin": isAdmin})
 }
 
 type errorResponse struct {

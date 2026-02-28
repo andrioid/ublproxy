@@ -45,8 +45,19 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) migrate() error {
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	// Add is_admin column to existing databases. Ignore "duplicate column"
+	// error for databases that already have it.
+	s.db.Exec("ALTER TABLE credentials ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+	// Promote the earliest credential to admin if no admin exists yet.
+	// Handles both fresh migrations of existing databases and the edge case
+	// where the only admin credential was deleted.
+	s.db.Exec(`UPDATE credentials SET is_admin = 1
+		WHERE rowid = (SELECT MIN(rowid) FROM credentials)
+		AND NOT EXISTS (SELECT 1 FROM credentials WHERE is_admin = 1)`)
+	return nil
 }
 
 const schema = `
@@ -54,6 +65,7 @@ CREATE TABLE IF NOT EXISTS credentials (
 	id         TEXT PRIMARY KEY,
 	public_key BLOB NOT NULL,
 	sign_count INTEGER NOT NULL DEFAULT 0,
+	is_admin   INTEGER NOT NULL DEFAULT 0,
 	created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

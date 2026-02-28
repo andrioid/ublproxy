@@ -25,6 +25,9 @@ var subscriptionsHTML string
 //go:embed static/activity.html
 var activityHTML string
 
+//go:embed static/users.html
+var usersHTML string
+
 //go:embed static/shared.css
 var sharedCSS string
 
@@ -304,6 +307,10 @@ func (p *proxyHandler) handlePortalSubscriptions(w http.ResponseWriter, r *http.
 
 func (p *proxyHandler) handlePortalActivity(w http.ResponseWriter, r *http.Request) {
 	serveHTML(w, activityHTML)
+}
+
+func (p *proxyHandler) handlePortalUsers(w http.ResponseWriter, r *http.Request) {
+	serveHTML(w, usersHTML)
 }
 
 func (p *proxyHandler) handleSetup(w http.ResponseWriter, r *http.Request) {

@@ -57,6 +57,10 @@
   }
 
   // --- Auth state ---
+  var _isAdmin = false;
+
+  function isAdmin() { return _isAdmin; }
+
   // Each page calls ublproxy.checkSession(onAuth, onUnauth)
   // onAuth() is called when user is authenticated
   // onUnauth() is called when user is not authenticated
@@ -64,31 +68,39 @@
     var token = getToken();
     var navStatus = document.getElementById('nav-status');
     var navLogout = document.getElementById('nav-logout');
-    var navLinks = document.querySelectorAll('.nav-link[data-auth]');
+    var authLinks = document.querySelectorAll('.nav-link[data-auth]');
+    var adminLinks = document.querySelectorAll('.nav-link[data-admin]');
 
-    if (!token) {
+    function hideAll() {
       if (navStatus) navStatus.textContent = 'Not signed in';
       if (navLogout) hide(navLogout);
-      navLinks.forEach(function(l) { hide(l); });
+      authLinks.forEach(function(l) { hide(l); });
+      adminLinks.forEach(function(l) { hide(l); });
+      _isAdmin = false;
+    }
+
+    if (!token) {
+      hideAll();
       if (onUnauth) onUnauth();
       return;
     }
 
     try {
-      var resp = await fetch('/api/rules', { headers: { 'Authorization': 'Bearer ' + token } });
+      var resp = await fetch('/api/whoami', { headers: { 'Authorization': 'Bearer ' + token } });
       if (resp.ok) {
+        var data = await resp.json();
+        _isAdmin = data.is_admin || false;
         if (navStatus) navStatus.innerHTML = '<span class="ok">Signed in</span>';
         if (navLogout) show(navLogout);
-        navLinks.forEach(function(l) { show(l); });
+        authLinks.forEach(function(l) { show(l); });
+        adminLinks.forEach(function(l) { if (_isAdmin) show(l); else hide(l); });
         if (onAuth) onAuth();
         return;
       }
     } catch (_) {}
 
     clearToken();
-    if (navStatus) navStatus.textContent = 'Not signed in';
-    if (navLogout) hide(navLogout);
-    navLinks.forEach(function(l) { hide(l); });
+    hideAll();
     if (onUnauth) onUnauth();
   }
 
@@ -191,6 +203,7 @@
     showMsg: showMsg,
     clearMsg: clearMsg,
     checkSession: checkSession,
+    isAdmin: isAdmin,
     register: register,
     login: login,
     logout: logout,

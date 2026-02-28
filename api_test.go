@@ -338,9 +338,161 @@ func TestCreateRuleEmptyRule(t *testing.T) {
 	}
 }
 
+func TestWhoami(t *testing.T) {
+	api := testAPI(t)
+
+	// Unauthenticated
+	rec := doRequest(t, api, "GET", "/api/whoami", nil, "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("whoami without auth: status %d, want 401", rec.Code)
+	}
+
+	// First user (admin)
+	adminToken := registerWithCredIDAndGetToken(t, api, []byte("admin-cred"))
+	rec = doRequest(t, api, "GET", "/api/whoami", nil, adminToken)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("whoami admin: status %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var whoami struct {
+		IsAdmin bool `json:"is_admin"`
+	}
+	decodeJSON(t, rec, &whoami)
+	if !whoami.IsAdmin {
+		t.Error("first user should be admin in whoami response")
+	}
+
+	// Second user (non-admin)
+	userToken := registerWithCredIDAndGetToken(t, api, []byte("user-cred"))
+	rec = doRequest(t, api, "GET", "/api/whoami", nil, userToken)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("whoami non-admin: status %d", rec.Code)
+	}
+	decodeJSON(t, rec, &whoami)
+	if whoami.IsAdmin {
+		t.Error("second user should not be admin in whoami response")
+	}
+}
+
+func TestActivityRequiresAdmin(t *testing.T) {
+	api := testAPI(t)
+	api.activityLog = NewActivityLog(100)
+
+	adminToken := registerWithCredIDAndGetToken(t, api, []byte("admin-cred"))
+	userToken := registerWithCredIDAndGetToken(t, api, []byte("user-cred"))
+
+	// Non-admin gets 403
+	rec := doRequest(t, api, "GET", "/api/activity", nil, userToken)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("activity non-admin: status %d, want 403", rec.Code)
+	}
+
+	// Admin gets 200
+	rec = doRequest(t, api, "GET", "/api/activity", nil, adminToken)
+	if rec.Code != http.StatusOK {
+		t.Errorf("activity admin: status %d, want 200", rec.Code)
+	}
+
+	// Stats remain accessible to non-admin
+	rec = doRequest(t, api, "GET", "/api/activity/stats", nil, userToken)
+	if rec.Code != http.StatusOK {
+		t.Errorf("activity/stats non-admin: status %d, want 200", rec.Code)
+	}
+}
+
+func TestUsersEndpoint(t *testing.T) {
+	api := testAPI(t)
+
+	adminToken := registerWithCredIDAndGetToken(t, api, []byte("admin-cred"))
+	userToken := registerWithCredIDAndGetToken(t, api, []byte("user-cred"))
+
+	// Non-admin gets 403
+	rec := doRequest(t, api, "GET", "/api/users", nil, userToken)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("users non-admin: status %d, want 403", rec.Code)
+	}
+
+	// Admin gets user list
+	rec = doRequest(t, api, "GET", "/api/users", nil, adminToken)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("users admin: status %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var users []struct {
+		ID        string `json:"id"`
+		IsAdmin   bool   `json:"is_admin"`
+		CreatedAt string `json:"created_at"`
+	}
+	decodeJSON(t, rec, &users)
+	if len(users) != 2 {
+		t.Fatalf("users count = %d, want 2", len(users))
+	}
+}
+
+func TestUsersToggleAdmin(t *testing.T) {
+	api := testAPI(t)
+
+	adminToken := registerWithCredIDAndGetToken(t, api, []byte("admin-cred"))
+	userToken := registerWithCredIDAndGetToken(t, api, []byte("user-cred"))
+
+	// Get user credential ID
+	rec := doRequest(t, api, "GET", "/api/users", nil, adminToken)
+	var users []struct {
+		ID      string `json:"id"`
+		IsAdmin bool   `json:"is_admin"`
+	}
+	decodeJSON(t, rec, &users)
+
+	var userCredID, adminCredID string
+	for _, u := range users {
+		if u.IsAdmin {
+			adminCredID = u.ID
+		} else {
+			userCredID = u.ID
+		}
+	}
+
+	// Non-admin cannot toggle
+	rec = doRequest(t, api, "PATCH", "/api/users/"+userCredID, map[string]bool{"is_admin": true}, userToken)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("patch user non-admin: status %d, want 403", rec.Code)
+	}
+
+	// Admin cannot modify own status
+	rec = doRequest(t, api, "PATCH", "/api/users/"+adminCredID, map[string]bool{"is_admin": false}, adminToken)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("patch self: status %d, want 403", rec.Code)
+	}
+
+	// Admin promotes another user
+	rec = doRequest(t, api, "PATCH", "/api/users/"+userCredID, map[string]bool{"is_admin": true}, adminToken)
+	if rec.Code != http.StatusOK {
+		t.Errorf("promote user: status %d, want 200, body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify promotion
+	isAdmin, _ := api.store.IsAdmin(userCredID)
+	if !isAdmin {
+		t.Error("user should be admin after promotion")
+	}
+
+	// Admin demotes the other user
+	rec = doRequest(t, api, "PATCH", "/api/users/"+userCredID, map[string]bool{"is_admin": false}, adminToken)
+	if rec.Code != http.StatusOK {
+		t.Errorf("demote user: status %d, want 200", rec.Code)
+	}
+	isAdmin, _ = api.store.IsAdmin(userCredID)
+	if isAdmin {
+		t.Error("user should not be admin after demotion")
+	}
+}
+
 // --- Helpers ---
 
 func registerAndGetToken(t *testing.T, api *apiHandler) string {
+	t.Helper()
+	return registerWithCredIDAndGetToken(t, api, []byte("test-cred"))
+}
+
+func registerWithCredIDAndGetToken(t *testing.T, api *apiHandler, credID []byte) string {
 	t.Helper()
 
 	rec := doRequest(t, api, "POST", "/api/auth/register/begin", nil, "")
@@ -354,7 +506,7 @@ func registerAndGetToken(t *testing.T, api *apiHandler) string {
 	var challenge webauthn.Challenge
 	copy(challenge[:], challengeBytes)
 
-	attestObj, clientDataJSON := buildTestRegistration(t, privateKey, []byte("test-cred"), challenge)
+	attestObj, clientDataJSON := buildTestRegistration(t, privateKey, credID, challenge)
 
 	rec = doRequest(t, api, "POST", "/api/auth/register/finish", map[string]string{
 		"attestationObject": base64.RawURLEncoding.EncodeToString(attestObj),
