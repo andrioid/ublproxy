@@ -164,6 +164,17 @@ var pacTmpl = template.Must(template.New("pac").Parse(`function FindProxyForURL(
       host === "localhost" || host === "127.0.0.1" || host === "::1") {
     return "DIRECT";
   }
+  // Captive portal / connectivity checks must bypass the proxy
+  // so the OS can verify internet access after wifi connects.
+  if (host === "captive.apple.com" ||
+      host === "connectivitycheck.gstatic.com" ||
+      host === "connectivitycheck.android.com" ||
+      host === "clients3.google.com" ||
+      host === "www.msftconnecttest.com" ||
+      host === "dns.msftncsi.com" ||
+      host === "detectportal.firefox.com") {
+    return "DIRECT";
+  }
   return "HTTPS {{.ProxyHost}}";
 }
 `))
@@ -173,6 +184,17 @@ var pacTmpl = template.Must(template.New("pac").Parse(`function FindProxyForURL(
 var mobilePacTmpl = template.Must(template.New("mobilepac").Parse(`function FindProxyForURL(url, host) {
   if (isPlainHostName(host) ||
       host === "localhost" || host === "127.0.0.1" || host === "::1") {
+    return "DIRECT";
+  }
+  // Captive portal / connectivity checks must bypass the proxy
+  // so the OS can verify internet access after wifi connects.
+  if (host === "captive.apple.com" ||
+      host === "connectivitycheck.gstatic.com" ||
+      host === "connectivitycheck.android.com" ||
+      host === "clients3.google.com" ||
+      host === "www.msftconnecttest.com" ||
+      host === "dns.msftncsi.com" ||
+      host === "detectportal.firefox.com") {
     return "DIRECT";
   }
   return "PROXY {{.ProxyHost}}";
