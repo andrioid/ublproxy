@@ -40,10 +40,8 @@ func (m *sessionMap) Get(clientIP string) *sessionEntry {
 	entry, ok := m.entries[clientIP]
 	m.mu.RUnlock()
 	if !ok {
-		slog.Debug("session lookup miss", "ip", clientIP)
 		return nil
 	}
-	slog.Debug("session lookup hit", "ip", clientIP, "user", shortUserID(entry.CredentialID))
 	return &entry
 }
 
