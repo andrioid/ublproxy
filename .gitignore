@@ -3,3 +3,4 @@ ublproxy
 mise.local.toml
 .playwright-cli/
 tmp/
+.DS_Store
