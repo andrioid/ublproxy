@@ -553,6 +553,76 @@ section {
   }
 }
 
+/* --- Lightbox --- */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0, 0, 0, 0.92);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s, visibility 0.2s;
+  cursor: zoom-out;
+}
+
+.lightbox[aria-hidden="false"] {
+  opacity: 1;
+  visibility: visible;
+}
+
+.lightbox-img {
+  max-width: 90vw;
+  max-height: 80vh;
+  object-fit: contain;
+  border: 1px solid rgba(0, 229, 255, 0.25);
+  border-radius: var(--radius);
+  box-shadow: 0 0 40px rgba(0, 229, 255, 0.08), 0 0 80px rgba(0, 0, 0, 0.5);
+  cursor: default;
+}
+
+.lightbox-caption {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  text-align: center;
+  max-width: 600px;
+}
+
+.lightbox-caption .caption-label {
+  color: var(--cyan);
+  font-weight: 600;
+}
+
+.lightbox-close {
+  position: absolute;
+  top: 1rem;
+  right: 1.5rem;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 1.25rem;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+.lightbox-close:hover {
+  color: var(--cyan);
+  border-color: rgba(0, 229, 255, 0.4);
+  box-shadow: var(--glow-cyan);
+}
+
 /* --- Architecture section --- */
 .arch-section {
   border-top: 1px solid var(--border);
@@ -717,6 +787,24 @@ td:first-child {
   margin-top: 1.5rem;
   color: var(--text-faint);
   font-size: 0.82rem;
+}
+
+/* --- Security section --- */
+.security-section {
+  border-top: 1px solid var(--border);
+}
+
+.security-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.25rem;
+}
+
+@media (max-width: 768px) {
+  .security-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
 }
 
 /* --- Install section --- */
@@ -998,7 +1086,7 @@ td:first-child {
 
     <div class="screenshots-grid">
       <div class="screenshot-card">
-        <a href="portal-setup.png" target="_blank">
+        <a href="portal-setup.png" data-lightbox>
           <img src="portal-setup.png" alt="ublproxy setup wizard showing CA certificate installation for iOS and macOS" loading="lazy" width="1200" height="800">
         </a>
         <div class="screenshot-caption">
@@ -1006,7 +1094,7 @@ td:first-child {
         </div>
       </div>
       <div class="screenshot-card">
-        <a href="portal-dashboard.png" target="_blank">
+        <a href="portal-dashboard.png" data-lightbox>
           <img src="portal-dashboard.png" alt="ublproxy dashboard showing blocked and passed request statistics" loading="lazy" width="1200" height="800">
         </a>
         <div class="screenshot-caption">
@@ -1014,7 +1102,7 @@ td:first-child {
         </div>
       </div>
       <div class="screenshot-card">
-        <a href="portal-activity.png" target="_blank">
+        <a href="portal-activity.png" data-lightbox>
           <img src="portal-activity.png" alt="ublproxy activity feed showing blocked ads and hidden elements" loading="lazy" width="1200" height="800">
         </a>
         <div class="screenshot-caption">
@@ -1022,7 +1110,7 @@ td:first-child {
         </div>
       </div>
       <div class="screenshot-card">
-        <a href="portal-subscriptions.png" target="_blank">
+        <a href="portal-subscriptions.png" data-lightbox>
           <img src="portal-subscriptions.png" alt="ublproxy subscriptions page with filter list management" loading="lazy" width="1200" height="800">
         </a>
         <div class="screenshot-caption">
@@ -1157,6 +1245,35 @@ td:first-child {
   </div>
 </section>
 
+<!-- Security -->
+<section class="security-section" id="security">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-label neon-magenta">Security</div>
+      <h2 class="section-title">Tradeoffs you should know about</h2>
+      <p class="section-desc">ublproxy decrypts your traffic to block ads. That power comes with responsibilities and limitations.</p>
+    </div>
+
+    <div class="security-grid">
+      <div class="problem-card">
+        <div class="icon">&#x1f50f;</div>
+        <h3>This is a MITM proxy</h3>
+        <p>All HTTPS traffic is decrypted, inspected, and re-encrypted. That's the point &mdash; but it means you should only run this on a network you control. Self-hosted, not cloud.</p>
+      </div>
+      <div class="problem-card">
+        <div class="icon">&#x1f3e6;</div>
+        <h3>Cert-pinned apps need exceptions</h3>
+        <p>Banking apps, security tools, and some system services use certificate pinning and will reject MITM certs. Add passthrough rules (<code style="background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:2px;font-family:var(--font-mono);font-size:0.82em;border:1px solid var(--border);color:var(--yellow)">@@||domain^</code>) for these.</p>
+      </div>
+      <div class="problem-card">
+        <div class="icon">&#x1f4f1;</div>
+        <h3>Mobile connections are unencrypted</h3>
+        <p>iOS and Android don't support HTTPS proxy connections. Mobile devices use HTTP CONNECT on port 8080 &mdash; the target hostname is visible on your LAN, though the tunneled content stays TLS-encrypted.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- Install -->
 <section class="install-section" id="install">
   <div class="container">
@@ -1207,6 +1324,53 @@ td:first-child {
     </ul>
   </div>
 </footer>
+
+<!-- Lightbox -->
+<div class="lightbox" aria-hidden="true" role="dialog" aria-label="Screenshot preview">
+  <button class="lightbox-close" aria-label="Close">&times;</button>
+  <img class="lightbox-img" src="" alt="">
+  <div class="lightbox-caption"></div>
+</div>
+
+<script>
+(function () {
+  var overlay = document.querySelector('.lightbox');
+  var img = overlay.querySelector('.lightbox-img');
+  var caption = overlay.querySelector('.lightbox-caption');
+  var closeBtn = overlay.querySelector('.lightbox-close');
+
+  function open(href, captionHTML) {
+    img.src = href;
+    caption.innerHTML = captionHTML;
+    overlay.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function close() {
+    overlay.setAttribute('aria-hidden', 'true');
+    document.body.style.overflow = '';
+  }
+
+  document.querySelectorAll('a[data-lightbox]').forEach(function (link) {
+    link.addEventListener('click', function (e) {
+      e.preventDefault();
+      var card = link.closest('.screenshot-card');
+      var captionEl = card ? card.querySelector('.caption-text') : null;
+      open(link.href, captionEl ? captionEl.innerHTML : '');
+    });
+  });
+
+  closeBtn.addEventListener('click', close);
+
+  overlay.addEventListener('click', function (e) {
+    if (e.target === overlay) close();
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && overlay.getAttribute('aria-hidden') === 'false') close();
+  });
+})();
+</script>
 
 </body>
 </html>
