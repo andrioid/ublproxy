@@ -479,6 +479,80 @@ section {
   line-height: 1.65;
 }
 
+/* --- Screenshots section --- */
+.screenshots-section {
+  border-top: 1px solid var(--border);
+}
+
+.screenshots-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.screenshot-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.screenshot-card:hover {
+  border-color: rgba(0, 229, 255, 0.4);
+  box-shadow: 0 0 30px rgba(0, 229, 255, 0.08), 0 0 60px rgba(0, 255, 65, 0.04);
+}
+
+.screenshot-card a {
+  display: block;
+}
+
+.screenshot-card img {
+  width: 100%;
+  height: auto;
+  display: block;
+  filter: brightness(0.92) contrast(1.05);
+  transition: filter 0.3s;
+}
+
+.screenshot-card:hover img {
+  filter: brightness(1) contrast(1.05);
+}
+
+.screenshot-caption {
+  padding: 0.85rem 1rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.screenshot-caption .caption-icon {
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+.screenshot-caption .caption-text {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.screenshot-caption .caption-label {
+  color: var(--cyan);
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .screenshots-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+}
+
 /* --- Architecture section --- */
 .arch-section {
   border-top: 1px solid var(--border);
@@ -791,6 +865,7 @@ td:first-child {
     <nav>
       <ul class="nav-links">
         <li class="nav-hide-mobile"><a href="#features">Features</a></li>
+        <li class="nav-hide-mobile"><a href="#screenshots">Screenshots</a></li>
         <li class="nav-hide-mobile"><a href="#comparison">Compare</a></li>
         <li><a href="#install">Install</a></li>
         <li>
@@ -907,6 +982,52 @@ td:first-child {
         <div class="feature-icon">&#x1f310;</div>
         <h3>Transparent proxy mode</h3>
         <p>Deploy on a VLAN with firewall rules to intercept all traffic automatically. A captive portal guides new devices through CA certificate setup.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Screenshots -->
+<section class="screenshots-section" id="screenshots">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-label neon-cyan">See it in action</div>
+      <h2 class="section-title">A portal you'll actually use</h2>
+      <p class="section-desc">Setup wizard, activity feed, subscription management. All accessible through the proxy's built-in web portal.</p>
+    </div>
+
+    <div class="screenshots-grid">
+      <div class="screenshot-card">
+        <a href="portal-setup.png" target="_blank">
+          <img src="portal-setup.png" alt="ublproxy setup wizard showing CA certificate installation for iOS and macOS" loading="lazy" width="1200" height="800">
+        </a>
+        <div class="screenshot-caption">
+          <span class="caption-text"><span class="caption-label">Setup wizard</span> &mdash; Guided CA cert install for each platform</span>
+        </div>
+      </div>
+      <div class="screenshot-card">
+        <a href="portal-dashboard.png" target="_blank">
+          <img src="portal-dashboard.png" alt="ublproxy dashboard showing blocked and passed request statistics" loading="lazy" width="1200" height="800">
+        </a>
+        <div class="screenshot-caption">
+          <span class="caption-text"><span class="caption-label">Dashboard</span> &mdash; Live stats for blocked and passed requests</span>
+        </div>
+      </div>
+      <div class="screenshot-card">
+        <a href="portal-activity.png" target="_blank">
+          <img src="portal-activity.png" alt="ublproxy activity feed showing blocked ads and hidden elements" loading="lazy" width="1200" height="800">
+        </a>
+        <div class="screenshot-caption">
+          <span class="caption-text"><span class="caption-label">Activity feed</span> &mdash; Every blocked, hidden, and passed request</span>
+        </div>
+      </div>
+      <div class="screenshot-card">
+        <a href="portal-subscriptions.png" target="_blank">
+          <img src="portal-subscriptions.png" alt="ublproxy subscriptions page with filter list management" loading="lazy" width="1200" height="800">
+        </a>
+        <div class="screenshot-caption">
+          <span class="caption-text"><span class="caption-label">Subscriptions</span> &mdash; Manage filter lists with one click</span>
+        </div>
       </div>
     </div>
   </div>
