@@ -1,0 +1,1091 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ublproxy - Network-wide ad-blocking HTTPS proxy</title>
+<meta name="description" content="A self-hosted HTTPS proxy with full Adblock Plus filter support, cosmetic filtering, per-user passkeys, and transparent proxy mode. Block ads at the HTTP layer, not just DNS.">
+<meta property="og:title" content="ublproxy - Network-wide ad-blocking HTTPS proxy">
+<meta property="og:description" content="Self-hosted HTTPS proxy with Adblock Plus filter support, cosmetic filtering, and passkey authentication. Goes where DNS blockers can't.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://andrioid.github.io/ublproxy/">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* --- Reset & base --- */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #08080c;
+  --bg-elevated: #0e0e14;
+  --bg-card: #12121a;
+  --border: #1e1e2a;
+  --border-light: #181822;
+  --text: #c8c8d0;
+  --text-muted: #707080;
+  --text-faint: #3a3a4a;
+  --accent: #00ff41;
+  --accent-hover: #00cc33;
+  --accent-glow: rgba(0, 255, 65, 0.1);
+  --green: #00ff41;
+  --cyan: #00e5ff;
+  --magenta: #ff2d7b;
+  --yellow: #ffe600;
+  --red: #ff2d7b;
+  --font-body: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  --max-w: 1100px;
+  --radius: 2px;
+  --glow-green: 0 0 8px rgba(0, 255, 65, 0.4);
+  --glow-green-strong: 0 0 12px rgba(0, 255, 65, 0.5), 0 0 40px rgba(0, 255, 65, 0.15);
+  --glow-cyan: 0 0 8px rgba(0, 229, 255, 0.4);
+  --glow-magenta: 0 0 8px rgba(255, 45, 123, 0.4);
+  --glow-yellow: 0 0 8px rgba(255, 230, 0, 0.35);
+}
+
+html { scroll-behavior: smooth; }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+/* --- CRT scanline overlay --- */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(200, 200, 255, 0.02) 0px,
+    rgba(200, 200, 255, 0.02) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* --- CRT vignette --- */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(ellipse at center, transparent 60%, rgba(0, 0, 0, 0.4) 100%);
+  pointer-events: none;
+  z-index: 9998;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* --- Staggered fade-in animation --- */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in {
+  opacity: 0;
+  animation: fadeUp 0.7s ease-out forwards;
+}
+
+.fade-in-d1 { animation-delay: 0.1s; }
+.fade-in-d2 { animation-delay: 0.2s; }
+.fade-in-d3 { animation-delay: 0.3s; }
+.fade-in-d4 { animation-delay: 0.4s; }
+.fade-in-d5 { animation-delay: 0.5s; }
+
+/* --- Layout --- */
+.container {
+  max-width: var(--max-w);
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+
+section {
+  padding: 5rem 0;
+}
+
+/* --- Header / Nav --- */
+.site-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  background: rgba(8, 8, 12, 0.88);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+
+.site-header .container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 56px;
+}
+
+.logo {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 1.1rem;
+  color: var(--text);
+  text-decoration: none;
+  letter-spacing: -0.03em;
+}
+
+.logo:hover { text-decoration: none; }
+
+.logo span { color: var(--accent); text-shadow: var(--glow-green); }
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 1.75rem;
+  list-style: none;
+}
+
+.nav-links a {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: color 0.15s;
+}
+
+.nav-links a:hover {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.gh-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.gh-link svg { width: 18px; height: 18px; fill: currentColor; }
+
+/* --- Hero --- */
+.hero {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  padding-top: 56px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Neon glow behind hero */
+.hero::before {
+  content: '';
+  position: absolute;
+  top: 5%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 1000px;
+  height: 800px;
+  background:
+    radial-gradient(ellipse at 30% 40%, rgba(0, 255, 65, 0.07) 0%, transparent 50%),
+    radial-gradient(ellipse at 70% 30%, rgba(0, 229, 255, 0.05) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 70%, rgba(255, 45, 123, 0.04) 0%, transparent 50%);
+  pointer-events: none;
+}
+
+.hero-content {
+  position: relative;
+  text-align: center;
+  max-width: 750px;
+  margin: 0 auto;
+}
+
+.hero-badge {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--magenta);
+  background: rgba(255, 45, 123, 0.1);
+  border: 1px solid rgba(255, 45, 123, 0.3);
+  border-radius: var(--radius);
+  padding: 0.3rem 0.9rem;
+  margin-bottom: 1.5rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-shadow: var(--glow-magenta);
+}
+
+.hero h1 {
+  font-family: var(--font-mono);
+  font-size: clamp(2.2rem, 5vw, 3.5rem);
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.04em;
+  margin-bottom: 1.25rem;
+  text-shadow: 0 0 30px rgba(0, 229, 255, 0.08);
+}
+
+.hero h1 em {
+  font-style: normal;
+  color: var(--cyan);
+  text-shadow: var(--glow-cyan), 0 0 40px rgba(0, 229, 255, 0.2);
+}
+
+.hero-sub {
+  font-size: 1.15rem;
+  color: var(--text-muted);
+  max-width: 580px;
+  margin: 0 auto 2rem;
+  line-height: 1.7;
+}
+
+.hero-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 3rem;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1.5rem;
+  border-radius: var(--radius);
+  font-weight: 600;
+  font-size: 0.85rem;
+  border: none;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
+  font-family: var(--font-mono);
+}
+
+.btn:hover { text-decoration: none; transform: translateY(-1px); }
+.btn:active { transform: translateY(0); }
+
+.btn-primary {
+  background: var(--accent);
+  color: #080c08;
+  box-shadow: var(--glow-green);
+}
+
+.btn-primary:hover { background: var(--accent-hover); box-shadow: var(--glow-green-strong); }
+
+.btn-secondary {
+  background: transparent;
+  color: var(--cyan);
+  border: 1px solid rgba(0, 229, 255, 0.3);
+}
+
+.btn-secondary:hover { background: rgba(0, 229, 255, 0.05); border-color: var(--cyan); box-shadow: var(--glow-cyan); }
+
+.btn svg { width: 16px; height: 16px; }
+
+/* Terminal snippet */
+.terminal {
+  background: var(--bg-elevated);
+  border: 1px solid rgba(0, 229, 255, 0.15);
+  border-radius: var(--radius);
+  max-width: 620px;
+  margin: 0 auto;
+  text-align: left;
+  overflow: hidden;
+  box-shadow: 0 0 25px rgba(0, 229, 255, 0.04), inset 0 0 30px rgba(0, 255, 65, 0.02);
+}
+
+.terminal-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0.5rem 0.85rem;
+  background: var(--bg-card);
+  border-bottom: 1px solid rgba(0, 229, 255, 0.12);
+}
+
+.terminal-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.terminal-dot:nth-child(1) { background: var(--magenta); opacity: 0.9; }
+.terminal-dot:nth-child(2) { background: var(--yellow); opacity: 0.9; }
+.terminal-dot:nth-child(3) { background: var(--green); opacity: 0.9; }
+
+.terminal-bar span {
+  flex: 1;
+  text-align: center;
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+}
+
+.terminal-body {
+  padding: 1rem 1.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  line-height: 1.8;
+  overflow-x: auto;
+}
+
+.terminal-body .prompt { color: var(--green); text-shadow: var(--glow-green); }
+.terminal-body .cmd { color: var(--text); }
+.terminal-body .flag { color: var(--yellow); text-shadow: var(--glow-yellow); }
+.terminal-body .comment { color: var(--text-faint); }
+
+/* --- Section headers --- */
+.section-header {
+  text-align: center;
+  max-width: 600px;
+  margin: 0 auto 3rem;
+}
+
+.section-label {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--cyan);
+  margin-bottom: 0.75rem;
+  text-shadow: var(--glow-cyan);
+}
+
+.section-label.neon-magenta { color: var(--magenta); text-shadow: var(--glow-magenta); }
+.section-label.neon-green { color: var(--green); text-shadow: var(--glow-green); }
+.section-label.neon-yellow { color: var(--yellow); text-shadow: var(--glow-yellow); }
+.section-label.neon-cyan { color: var(--cyan); text-shadow: var(--glow-cyan); }
+
+.section-title {
+  font-family: var(--font-mono);
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  margin-bottom: 0.75rem;
+}
+
+.section-desc {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+/* --- Problem section --- */
+.problem-section {
+  border-top: 1px solid var(--border);
+}
+
+.problem-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem;
+}
+
+.problem-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2rem;
+}
+
+.problem-card .icon {
+  font-size: 1.75rem;
+  margin-bottom: 1rem;
+}
+
+.problem-card h3 {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  letter-spacing: -0.02em;
+  color: var(--magenta);
+  text-shadow: 0 0 12px rgba(255, 45, 123, 0.2);
+}
+
+.problem-card p {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.7;
+}
+
+/* --- Features section --- */
+.features-section {
+  border-top: 1px solid var(--border);
+}
+
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.25rem;
+}
+
+.feature-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.75rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.feature-card:hover {
+  border-color: rgba(0, 229, 255, 0.3);
+  box-shadow: 0 0 20px rgba(0, 229, 255, 0.06);
+}
+
+.feature-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  margin-bottom: 1rem;
+  background: rgba(0, 229, 255, 0.08);
+  border: 1px solid rgba(0, 229, 255, 0.15);
+}
+
+.feature-card h3 {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  letter-spacing: -0.01em;
+  color: var(--cyan);
+}
+
+.feature-card p {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1.65;
+}
+
+/* --- Architecture section --- */
+.arch-section {
+  border-top: 1px solid var(--border);
+}
+
+.arch-diagram {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  max-width: 900px;
+  margin: 0 auto;
+  flex-wrap: wrap;
+}
+
+.arch-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.arch-node {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.8rem 1.2rem;
+  text-align: center;
+  font-size: 0.8rem;
+  min-width: 100px;
+}
+
+.arch-node-label {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: -0.01em;
+}
+
+.arch-node-sub {
+  color: var(--text-faint);
+  font-size: 0.7rem;
+  margin-top: 0.2rem;
+}
+
+.arch-proxy {
+  background: rgba(0, 255, 65, 0.06);
+  border-color: rgba(0, 255, 65, 0.3);
+  padding: 1.5rem 2rem;
+  min-width: 180px;
+  box-shadow: 0 0 25px rgba(0, 255, 65, 0.1);
+}
+
+.arch-proxy .arch-node-label {
+  color: var(--accent);
+  font-size: 0.95rem;
+  text-shadow: var(--glow-green);
+}
+
+.arch-arrow {
+  display: flex;
+  align-items: center;
+  padding: 0 1rem;
+  color: var(--cyan);
+  opacity: 0.5;
+  font-family: var(--font-mono);
+  font-size: 1.4rem;
+  flex-shrink: 0;
+}
+
+.arch-features {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.arch-tag {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.arch-caption {
+  text-align: center;
+  margin-top: 2.5rem;
+  max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.arch-caption p {
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  line-height: 1.7;
+}
+
+.arch-caption p + p {
+  margin-top: 0.75rem;
+}
+
+/* --- Comparison table --- */
+.compare-section {
+  border-top: 1px solid var(--border);
+}
+
+.compare-table-wrap {
+  overflow-x: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+thead {
+  background: var(--bg-card);
+}
+
+th {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
+  text-align: left;
+  padding: 0.85rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+th:first-child { min-width: 200px; }
+
+td {
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--border-light);
+  vertical-align: top;
+}
+
+tr:last-child td { border-bottom: none; }
+
+tbody tr:hover { background: var(--bg-elevated); }
+
+td:first-child {
+  font-weight: 500;
+}
+
+.check { color: var(--green); font-weight: 700; text-shadow: var(--glow-green); }
+.cross { color: var(--magenta); opacity: 0.8; text-shadow: 0 0 6px rgba(255, 45, 123, 0.2); }
+.partial { color: var(--yellow); text-shadow: 0 0 6px rgba(255, 230, 0, 0.15); }
+
+.compare-note {
+  text-align: center;
+  margin-top: 1.5rem;
+  color: var(--text-faint);
+  font-size: 0.82rem;
+}
+
+/* --- Install section --- */
+.install-section {
+  border-top: 1px solid var(--border);
+}
+
+.install-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.install-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2rem;
+}
+
+.install-card h3 {
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+
+.install-card p {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1.65;
+  margin-bottom: 1rem;
+}
+
+.code-block {
+  background: var(--bg-elevated);
+  border: 1px solid rgba(0, 229, 255, 0.12);
+  border-radius: var(--radius);
+  padding: 0.85rem 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.6;
+  overflow-x: auto;
+  position: relative;
+  word-break: break-all;
+  box-shadow: inset 0 0 20px rgba(0, 229, 255, 0.02);
+}
+
+.code-block .prompt { color: var(--green); text-shadow: var(--glow-green); }
+.code-block .flag { color: var(--yellow); text-shadow: var(--glow-yellow); }
+
+.install-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  margin-top: 0.5rem;
+}
+
+/* --- Footer --- */
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 3rem 0;
+  text-align: center;
+}
+
+.footer-brand {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--text);
+  margin-bottom: 0.5rem;
+}
+
+.footer-brand span { color: var(--accent); text-shadow: var(--glow-green); }
+
+.footer-tagline {
+  color: var(--text-faint);
+  font-size: 0.82rem;
+  margin-bottom: 1.25rem;
+}
+
+.footer-links {
+  display: flex;
+  gap: 1.5rem;
+  justify-content: center;
+  list-style: none;
+  font-size: 0.82rem;
+}
+
+.footer-links a { color: var(--text-muted); }
+.footer-links a:hover { color: var(--text); }
+
+/* --- Responsive --- */
+@media (max-width: 768px) {
+  section { padding: 3.5rem 0; }
+
+  .nav-links { gap: 1rem; }
+
+  .problem-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  .features-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  .arch-diagram {
+    flex-direction: column;
+  }
+
+  .arch-arrow {
+    transform: rotate(90deg);
+    padding: 0.5rem 0;
+  }
+
+  .install-options {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  .hero-actions {
+    flex-direction: column;
+    align-items: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .container { padding: 0 1rem; }
+  .site-header .container { padding: 0 1rem; }
+  .nav-links .nav-hide-mobile { display: none; }
+}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="site-header">
+  <div class="container">
+    <a href="#" class="logo">ubl<span>proxy</span></a>
+    <nav>
+      <ul class="nav-links">
+        <li class="nav-hide-mobile"><a href="#features">Features</a></li>
+        <li class="nav-hide-mobile"><a href="#comparison">Compare</a></li>
+        <li><a href="#install">Install</a></li>
+        <li>
+          <a href="https://github.com/andrioid/ublproxy" class="gh-link" aria-label="GitHub">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+            GitHub
+          </a>
+        </li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="container">
+    <div class="hero-content">
+      <div class="hero-badge fade-in">Self-hosted ad blocker</div>
+      <h1 class="fade-in fade-in-d1">Your browser should<br>work for <em>you</em></h1>
+      <p class="hero-sub fade-in fade-in-d2">
+        A network-wide HTTPS proxy that blocks ads at the HTTP layer.
+        Full Adblock Plus filter support, cosmetic filtering, and per-user
+        passkey authentication. Goes where DNS blockers can't.
+      </p>
+      <div class="hero-actions fade-in fade-in-d3">
+        <a href="https://github.com/andrioid/ublproxy/blob/main/QUICK_START.md" class="btn btn-primary">
+          Quick Start
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg>
+        </a>
+        <a href="https://github.com/andrioid/ublproxy" class="btn btn-secondary">
+          <svg viewBox="0 0 16 16" fill="currentColor" style="width:16px;height:16px"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          View on GitHub
+        </a>
+      </div>
+
+      <div class="terminal fade-in fade-in-d4">
+        <div class="terminal-bar">
+          <div class="terminal-dot"></div>
+          <div class="terminal-dot"></div>
+          <div class="terminal-dot"></div>
+          <span>user@ublproxy:~</span>
+        </div>
+        <div class="terminal-body">
+          <span class="comment"># Run with Docker</span><br>
+          <span class="prompt">$</span> <span class="cmd">docker run</span> <span class="flag">-p 8080:8080 -p 8443:8443</span> <span class="cmd">\</span><br>
+          &nbsp;&nbsp;<span class="flag">-v</span> <span class="cmd">ublproxy-data:/root/.ublproxy</span> <span class="cmd">\</span><br>
+          &nbsp;&nbsp;<span class="cmd">ghcr.io/andrioid/ublproxy:latest</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Problem -->
+<section class="problem-section" id="problem">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-label neon-magenta">The problem</div>
+      <h2 class="section-title">Ads got smarter. Your tools didn't.</h2>
+      <p class="section-desc">Browser extensions are being weakened. DNS blockers leave gaps. There's a better layer to fight at.</p>
+    </div>
+
+    <div class="problem-grid">
+      <div class="problem-card">
+        <div class="icon">&#x1f310;</div>
+        <h3>Browsers serve advertisers</h3>
+        <p>Browsers were supposed to be "user-agents" that work for you. Manifest V3 restricts ad-blocking extensions, making them less effective by design. Your browser's incentives aren't aligned with yours.</p>
+      </div>
+      <div class="problem-card">
+        <div class="icon">&#x1f50d;</div>
+        <h3>DNS blocking has blind spots</h3>
+        <p>Pi-hole and AdGuard Home block entire hostnames -- but same-origin ads, tracking scripts on CDN paths, and anti-adblock scripts all slip through. You can't block <code style="background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:2px;font-family:var(--font-mono);font-size:0.82em;border:1px solid var(--border);color:var(--yellow)">/ads/banner.js</code> at the DNS level.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Features -->
+<section class="features-section" id="features">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-label neon-cyan">Features</div>
+      <h2 class="section-title">HTTP-layer ad blocking, done right</h2>
+      <p class="section-desc">Everything you need to take back control of your browsing experience across every device on your network.</p>
+    </div>
+
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon">&#x1f4cb;</div>
+        <h3>Adblock Plus filter lists</h3>
+        <p>Subscribe to EasyList, EasyPrivacy, and other community-maintained blocklists. Same syntax as browser extensions, applied at the network level.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#x2702;&#xfe0f;</div>
+        <h3>URL-path blocking</h3>
+        <p>Block specific paths like <code style="font-family:var(--font-mono);font-size:0.82em;color:var(--yellow)">/ads/tracker.js</code> while allowing legitimate content from the same domain. Impossible with DNS blockers.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#x1f3a8;</div>
+        <h3>Cosmetic filtering</h3>
+        <p>CSS is injected into HTML responses to hide ad containers, banners, and unwanted elements. No empty placeholders or broken layouts.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#x1f5b1;&#xfe0f;</div>
+        <h3>Interactive element picker</h3>
+        <p>Press <kbd style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:2px;padding:0.1rem 0.4rem;font-size:0.82em;color:var(--yellow)">Alt+Shift+B</kbd> on any proxied page to visually select and block elements. Point, click, done.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#x1f511;</div>
+        <h3>Passkey authentication</h3>
+        <p>No usernames or passwords. Each user authenticates with WebAuthn passkeys and gets their own rules and subscriptions, layered on top of server-wide blocklists.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#x1f310;</div>
+        <h3>Transparent proxy mode</h3>
+        <p>Deploy on a VLAN with firewall rules to intercept all traffic automatically. A captive portal guides new devices through CA certificate setup.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Architecture -->
+<section class="arch-section" id="architecture">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-label neon-green">Architecture</div>
+      <h2 class="section-title">Sits between you and the internet</h2>
+      <p class="section-desc">A man-in-the-middle proxy that intercepts, inspects, and modifies HTTP/HTTPS traffic before it reaches your browser.</p>
+    </div>
+
+    <div class="arch-diagram">
+      <div class="arch-group">
+        <div class="arch-node">
+          <div class="arch-node-label">Desktop</div>
+          <div class="arch-node-sub">:8443 HTTPS</div>
+        </div>
+        <div class="arch-node">
+          <div class="arch-node-label">Laptop</div>
+          <div class="arch-node-sub">:8443 HTTPS</div>
+        </div>
+        <div class="arch-node">
+          <div class="arch-node-label">Phone</div>
+          <div class="arch-node-sub">:8080 HTTP</div>
+        </div>
+      </div>
+
+      <div class="arch-arrow">&rarr;</div>
+
+      <div class="arch-group">
+        <div class="arch-node arch-proxy">
+          <div class="arch-node-label">ublproxy</div>
+          <div class="arch-node-sub" style="color:var(--text-muted)">~16 MB single binary</div>
+          <div class="arch-features">
+            <span class="arch-tag" style="color:var(--green);border-color:rgba(0,255,65,0.2)">Blocklist engine</span>
+            <span class="arch-tag" style="color:var(--magenta);border-color:rgba(255,45,123,0.2)">TLS MITM</span>
+            <span class="arch-tag" style="color:var(--cyan);border-color:rgba(0,229,255,0.2)">CSS injection</span>
+            <span class="arch-tag" style="color:var(--yellow);border-color:rgba(255,230,0,0.2)">SQLite</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="arch-arrow">&rarr;</div>
+
+      <div class="arch-group">
+        <div class="arch-node">
+          <div class="arch-node-label">Internet</div>
+          <div class="arch-node-sub">Upstream servers</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arch-caption">
+      <p>Desktops and laptops connect over HTTPS on port 8443 via PAC file or manual proxy settings. Mobile devices connect over HTTP on port 8080. The proxy generates per-host TLS certificates on the fly using its own CA.</p>
+      <p>Blocked resource elements (<code style="background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:2px;font-family:var(--font-mono);font-size:0.85em;border:1px solid var(--border);color:var(--magenta)">&lt;script&gt;</code>, <code style="background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:2px;font-family:var(--font-mono);font-size:0.85em;border:1px solid var(--border);color:var(--magenta)">&lt;iframe&gt;</code>) are stripped from HTML. CSS element-hiding rules are pre-filtered from ~64K global selectors down to &lt;200 per page, then injected.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Comparison table -->
+<section class="compare-section" id="comparison">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-label neon-yellow">Comparison</div>
+      <h2 class="section-title">ublproxy vs DNS blockers</h2>
+      <p class="section-desc">Different layers, different strengths. They work best together.</p>
+    </div>
+
+    <div class="compare-table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Capability</th>
+            <th>ublproxy</th>
+            <th>DNS blockers</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>URL-path blocking</td>
+            <td><span class="check">Yes</span></td>
+            <td><span class="cross">No</span> &mdash; hostname only</td>
+          </tr>
+          <tr>
+            <td>Cosmetic filtering (hide elements)</td>
+            <td><span class="check">Yes</span> &mdash; CSS injection</td>
+            <td><span class="cross">No</span> &mdash; leaves placeholders</td>
+          </tr>
+          <tr>
+            <td>Adblock Plus filter lists</td>
+            <td><span class="check">Full syntax</span></td>
+            <td><span class="partial">Domain lists only</span></td>
+          </tr>
+          <tr>
+            <td>Anti-adblock resilience</td>
+            <td><span class="check">Content-level modification</span></td>
+            <td><span class="cross">Easily detected</span></td>
+          </tr>
+          <tr>
+            <td>Per-user rules</td>
+            <td><span class="check">Passkey auth</span></td>
+            <td><span class="cross">No</span> &mdash; network-wide only</td>
+          </tr>
+          <tr>
+            <td>Setup complexity</td>
+            <td><span class="partial">CA cert + proxy config</span></td>
+            <td><span class="check">Change DNS server</span></td>
+          </tr>
+          <tr>
+            <td>Non-HTTP protocols</td>
+            <td><span class="cross">HTTP/HTTPS only</span></td>
+            <td><span class="check">All protocols</span></td>
+          </tr>
+          <tr>
+            <td>Resource usage</td>
+            <td><span class="partial">Higher</span> &mdash; TLS decrypt/re-encrypt</td>
+            <td><span class="check">Minimal</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="compare-note">These approaches aren't mutually exclusive. A DNS blocker handles the bulk of known ad domains cheaply, while ublproxy handles the cases DNS blocking can't reach.</p>
+  </div>
+</section>
+
+<!-- Install -->
+<section class="install-section" id="install">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-label neon-green">Get started</div>
+      <h2 class="section-title">Up and running in minutes</h2>
+      <p class="section-desc">Single binary, no external dependencies, pure Go. Docker or download -- your choice.</p>
+    </div>
+
+    <div class="install-options">
+      <div class="install-card">
+        <h3>Docker</h3>
+        <p>Pull the multi-arch image and run:</p>
+        <div class="code-block">
+          <span class="prompt">$</span> docker run <span class="flag">-p 8080:8080 -p 8443:8443</span> \<br>
+          &nbsp;&nbsp;<span class="flag">-v</span> ublproxy-data:/root/.ublproxy \<br>
+          &nbsp;&nbsp;ghcr.io/andrioid/ublproxy:latest
+        </div>
+        <a href="https://github.com/andrioid/ublproxy/blob/main/QUICK_START.md" class="install-link">
+          Full setup guide &rarr;
+        </a>
+      </div>
+      <div class="install-card">
+        <h3>Binary</h3>
+        <p>Download a pre-built binary for your platform. Available for Linux and macOS on amd64 and arm64.</p>
+        <div class="code-block">
+          <span class="prompt">$</span> tar xzf ublproxy-linux-amd64.tar.gz<br>
+          <span class="prompt">$</span> ./ublproxy
+        </div>
+        <a href="https://github.com/andrioid/ublproxy/releases" class="install-link">
+          Download from Releases &rarr;
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-brand">ubl<span>proxy</span></div>
+    <p class="footer-tagline">Made for people who want their browsers back.</p>
+    <ul class="footer-links">
+      <li><a href="https://github.com/andrioid/ublproxy">GitHub</a></li>
+      <li><a href="https://github.com/andrioid/ublproxy/blob/main/QUICK_START.md">Docs</a></li>
+      <li><a href="https://github.com/andrioid/ublproxy/releases">Releases</a></li>
+      <li><a href="https://github.com/andrioid/ublproxy/blob/main/LICENSE.md">AGPL-3.0</a></li>
+    </ul>
+  </div>
+</footer>
+
+</body>
+</html>
