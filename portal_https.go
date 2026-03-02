@@ -92,14 +92,15 @@ func (h *portalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // traffic and the management portal. HTTP/2 is disabled because
 // CONNECT tunnels require Hijack which only works with HTTP/1.1.
 func startPortalHTTPS(listenAddr string, host string, extraIPs []net.IP, certs *ca.Cache, handler *portalHandler) {
-	cert, err := certs.PortalCert(host, extraIPs...)
-	if err != nil {
-		slog.Error("portal: failed to generate TLS cert", "err", err)
-		os.Exit(1)
-	}
+	certs.SetPortalParams(host, extraIPs)
 
 	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{*cert},
+		// Dynamic cert lookup so the portal cert is regenerated when it
+		// expires (24h). Without this the static cert baked at startup
+		// would cause TLS errors after 24h of uptime.
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return certs.GetPortalCert()
+		},
 	}
 
 	server := &http.Server{

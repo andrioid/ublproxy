@@ -21,6 +21,11 @@ type Cache struct {
 	mu    sync.RWMutex
 	certs map[string]*cachedCert
 
+	// Portal cert cached separately from per-host certs
+	portalCert *cachedCert
+	portalHost string
+	portalIPs  []net.IP
+
 	CACert *x509.Certificate
 	caKey  *rsa.PrivateKey
 }
@@ -31,6 +36,41 @@ func NewCache(caCert *x509.Certificate, caKey *rsa.PrivateKey) *Cache {
 		CACert: caCert,
 		caKey:  caKey,
 	}
+}
+
+// SetPortalParams stores the hostname and extra IPs used for portal cert
+// generation. These are fixed for the lifetime of the process.
+func (c *Cache) SetPortalParams(host string, extraIPs []net.IP) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.portalHost = host
+	c.portalIPs = extraIPs
+}
+
+// GetPortalCert returns a cached portal certificate, regenerating it when
+// expired. SetPortalParams must be called before the first call.
+func (c *Cache) GetPortalCert() (*tls.Certificate, error) {
+	c.mu.RLock()
+	if c.portalCert != nil && time.Now().Before(c.portalCert.expiresAt) {
+		cert := c.portalCert.cert
+		c.mu.RUnlock()
+		return cert, nil
+	}
+	c.mu.RUnlock()
+
+	cert, err := c.PortalCert(c.portalHost, c.portalIPs...)
+	if err != nil {
+		return nil, err
+	}
+
+	c.mu.Lock()
+	c.portalCert = &cachedCert{
+		cert:      cert,
+		expiresAt: time.Now().Add(24 * time.Hour),
+	}
+	c.mu.Unlock()
+
+	return cert, nil
 }
 
 func (c *Cache) GetCert(host string) (*tls.Certificate, error) {
