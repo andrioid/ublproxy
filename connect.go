@@ -35,6 +35,15 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Circuit breaker: skip MITM for hosts with repeated handshake
+	// failures (likely cert-pinned).
+	if p.handshakeTracker != nil && p.handshakeTracker.IsTripped(host) {
+		p.logActivity(ActivityAutoPassthrough, host, "", "auto-passthrough", clientIP, credID)
+		logAutoPassthrough(host, clientIP, credID)
+		p.tunnelPassthrough(w, r, host, port, clientIP, credID)
+		return
+	}
+
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
@@ -65,9 +74,16 @@ func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 	})
 	if err := tlsClientConn.Handshake(); err != nil {
 		logError("connect/client-tls", err, clientIP, credID)
+		if p.handshakeTracker != nil {
+			p.handshakeTracker.RecordFailure(host)
+		}
 		return
 	}
 	defer tlsClientConn.Close()
+
+	if p.handshakeTracker != nil {
+		p.handshakeTracker.RecordSuccess(host)
+	}
 
 	// Clear the deadline after successful handshake
 	clientConn.SetDeadline(time.Time{})

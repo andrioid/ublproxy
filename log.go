@@ -108,3 +108,13 @@ func logPassthrough(host, clientIP, credentialID string) {
 		"user", shortUserID(credentialID),
 	)
 }
+
+// logAutoPassthrough logs when the circuit breaker bypasses MITM for a
+// host with repeated TLS handshake failures (likely cert-pinned).
+func logAutoPassthrough(host, clientIP, credentialID string) {
+	slog.Warn("auto-passthrough",
+		"host", host,
+		"ip", clientIP,
+		"user", shortUserID(credentialID),
+	)
+}

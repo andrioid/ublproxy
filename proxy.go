@@ -30,6 +30,10 @@ type proxyHandler struct {
 	// activityLog records recent proxy events for the activity feed.
 	activityLog *ActivityLog
 
+	// handshakeTracker detects cert-pinned hosts via repeated TLS
+	// handshake failures and auto-switches them to passthrough.
+	handshakeTracker *handshakeTracker
+
 	// baselineRules are the always-active rules loaded from --blocklist
 	// sources and --default-subscription lists. These apply to all traffic
 	// regardless of user.

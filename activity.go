@@ -7,10 +7,11 @@ import (
 
 // Activity types for the proxy event log.
 const (
-	ActivityBlocked       = "blocked"
-	ActivityAllowed       = "allowed"
-	ActivityPassthrough   = "passthrough"
-	ActivityElementHidden = "element-hidden"
+	ActivityBlocked         = "blocked"
+	ActivityAllowed         = "allowed"
+	ActivityPassthrough     = "passthrough"
+	ActivityAutoPassthrough = "auto-passthrough"
+	ActivityElementHidden   = "element-hidden"
 )
 
 // ActivityEntry represents a single proxy event.

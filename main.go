@@ -150,6 +150,8 @@ func run(_ context.Context, cmd *cli.Command) error {
 		extraIPs = append(extraIPs, net.ParseIP(lanIP))
 	}
 
+	handler.handshakeTracker = newHandshakeTracker(hostname, extraIPs)
+
 	// For the HTTP origin, prefer the LAN IP over "localhost" since
 	// devices need a routable address to reach the proxy.
 	httpHost := hostname

@@ -478,6 +478,16 @@ func handleTransparentTLSConn(conn net.Conn, proxy *proxyHandler, certs *ca.Cach
 		return
 	}
 
+	// Circuit breaker: skip MITM for hosts with repeated handshake
+	// failures (likely cert-pinned). The buffered reader still has
+	// the peeked ClientHello, so passthrough can replay it upstream.
+	if proxy.handshakeTracker != nil && proxy.handshakeTracker.IsTripped(sni) {
+		proxy.logActivity(ActivityAutoPassthrough, sni, "", "auto-passthrough", clientIP, credID)
+		logAutoPassthrough(sni, clientIP, credID)
+		handleTransparentPassthrough(conn, br, sni, clientIP, credID)
+		return
+	}
+
 	// MITM: generate cert, complete TLS handshake, proxy requests
 	handleTransparentMITM(conn, br, proxy, certs, sni, clientIP, credID, trustTracker)
 }
@@ -570,9 +580,16 @@ func handleTransparentMITM(conn net.Conn, br *bufio.Reader, proxy *proxyHandler,
 	if err := tlsConn.Handshake(); err != nil {
 		// Client doesn't trust our CA — this is expected for unconfigured clients
 		logError("transparent-tls/client-tls", err, clientIP, credID)
+		if proxy.handshakeTracker != nil {
+			proxy.handshakeTracker.RecordFailure(sni)
+		}
 		return
 	}
 	defer tlsConn.Close()
+
+	if proxy.handshakeTracker != nil {
+		proxy.handshakeTracker.RecordSuccess(sni)
+	}
 
 	// Successful handshake means client trusts our CA
 	trustTracker.markTrusted(clientIP)
