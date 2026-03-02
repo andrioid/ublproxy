@@ -1263,7 +1263,7 @@ td:first-child {
       <div class="problem-card">
         <div class="icon">&#x1f3e6;</div>
         <h3>Cert-pinned apps need exceptions</h3>
-        <p>Banking apps, security tools, and some system services use certificate pinning and will reject MITM certs. Add passthrough rules (<code style="background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:2px;font-family:var(--font-mono);font-size:0.82em;border:1px solid var(--border);color:var(--yellow)">@@||domain^</code>) for these.</p>
+        <p>Banking apps, security tools, and some system services use certificate pinning and will reject MITM certs. The proxy detects this automatically and switches to passthrough. You can also add manual rules (<code style="background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:2px;font-family:var(--font-mono);font-size:0.82em;border:1px solid var(--border);color:var(--yellow)">@@||domain^</code>).</p>
       </div>
       <div class="problem-card">
         <div class="icon">&#x1f4f1;</div>

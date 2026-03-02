@@ -163,7 +163,7 @@ Solutions like [Pi-hole](https://pi-hole.net/) and [AdGuard Home](https://github
 ### Disadvantages
 
 - **CA certificate required**: Every device must trust the proxy's CA certificate. This adds setup friction and has security implications — the proxy can decrypt all HTTPS traffic.
-- **Certificate-pinned apps may break**: Some apps (banking, security) use certificate pinning and will reject the proxy's MITM certificates. These need passthrough rules (`@@||domain^`).
+- **Certificate-pinned apps**: Some apps (banking, security) use certificate pinning and will reject the proxy's MITM certificates. The proxy detects repeated handshake failures and automatically switches these hosts to passthrough. You can also manually add passthrough rules (`@@||domain^`).
 - **Higher resource usage**: Decrypting, inspecting, and re-encrypting every HTTPS connection is more resource-intensive than responding to DNS queries.
 - **More complex setup**: Requires proxy configuration (PAC files or transparent mode with firewall rules) on top of CA certificate installation, compared to just changing a DNS server address.
 - **HTTP-only**: Does not block non-HTTP traffic. DNS blockers intercept all protocols (QUIC, raw TCP, etc.) at the domain level.
