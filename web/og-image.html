@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1200">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  width: 1200px;
+  height: 630px;
+  overflow: hidden;
+  font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  background: #08080c;
+  color: #c8c8d0;
+  -webkit-font-smoothing: antialiased;
+  position: relative;
+}
+
+/* CRT scanlines */
+body::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(200, 200, 255, 0.025) 0px,
+    rgba(200, 200, 255, 0.025) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Vignette */
+body::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at center, transparent 50%, rgba(0, 0, 0, 0.5) 100%);
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Neon ambient glow */
+.glow-bg {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 25% 35%, rgba(0, 255, 65, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse at 75% 25%, rgba(0, 229, 255, 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 80%, rgba(255, 45, 123, 0.04) 0%, transparent 45%);
+  pointer-events: none;
+}
+
+.content {
+  position: relative;
+  z-index: 5;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding: 0 80px;
+  gap: 60px;
+}
+
+.left {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 500;
+  color: #ff2d7b;
+  background: rgba(255, 45, 123, 0.1);
+  border: 1px solid rgba(255, 45, 123, 0.3);
+  border-radius: 2px;
+  padding: 4px 12px;
+  margin-bottom: 20px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-shadow: 0 0 8px rgba(255, 45, 123, 0.4);
+  width: fit-content;
+}
+
+.logo {
+  font-size: 48px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  margin-bottom: 8px;
+  line-height: 1.1;
+}
+
+.logo .green {
+  color: #00ff41;
+  text-shadow: 0 0 12px rgba(0, 255, 65, 0.5), 0 0 40px rgba(0, 255, 65, 0.15);
+}
+
+h1 {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+  margin-bottom: 16px;
+}
+
+h1 em {
+  font-style: normal;
+  color: #00e5ff;
+  text-shadow: 0 0 8px rgba(0, 229, 255, 0.4), 0 0 40px rgba(0, 229, 255, 0.15);
+}
+
+.subtitle {
+  font-size: 14px;
+  color: #707080;
+  line-height: 1.7;
+  max-width: 440px;
+}
+
+.right {
+  flex-shrink: 0;
+  width: 460px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+/* Terminal widget */
+.terminal {
+  background: #0e0e14;
+  border: 1px solid rgba(0, 229, 255, 0.18);
+  border-radius: 2px;
+  overflow: hidden;
+  box-shadow:
+    0 0 30px rgba(0, 229, 255, 0.06),
+    0 0 60px rgba(0, 255, 65, 0.03),
+    inset 0 0 30px rgba(0, 255, 65, 0.02);
+}
+
+.terminal-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: #12121a;
+  border-bottom: 1px solid rgba(0, 229, 255, 0.12);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.dot:nth-child(1) { background: #ff2d7b; opacity: 0.9; }
+.dot:nth-child(2) { background: #ffe600; opacity: 0.9; }
+.dot:nth-child(3) { background: #00ff41; opacity: 0.9; }
+
+.terminal-bar span {
+  flex: 1;
+  text-align: center;
+  font-size: 10px;
+  color: #3a3a4a;
+}
+
+.terminal-body {
+  padding: 16px 18px;
+  font-size: 12.5px;
+  line-height: 1.9;
+}
+
+.prompt { color: #00ff41; text-shadow: 0 0 8px rgba(0, 255, 65, 0.4); }
+.cmd { color: #c8c8d0; }
+.flag { color: #ffe600; text-shadow: 0 0 8px rgba(255, 230, 0, 0.35); }
+.comment { color: #3a3a4a; }
+
+/* Feature tags below terminal */
+.tags {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.tag {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 2px;
+  background: #0e0e14;
+  border: 1px solid #1e1e2a;
+}
+
+.tag-green { color: #00ff41; border-color: rgba(0, 255, 65, 0.25); }
+.tag-cyan { color: #00e5ff; border-color: rgba(0, 229, 255, 0.25); }
+.tag-magenta { color: #ff2d7b; border-color: rgba(255, 45, 123, 0.25); }
+.tag-yellow { color: #ffe600; border-color: rgba(255, 230, 0, 0.25); }
+
+/* Decorative grid lines */
+.grid-lines {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.035;
+  background:
+    linear-gradient(90deg, #00e5ff 1px, transparent 1px),
+    linear-gradient(0deg, #00e5ff 1px, transparent 1px);
+  background-size: 60px 60px;
+}
+</style>
+</head>
+<body>
+  <div class="glow-bg"></div>
+  <div class="grid-lines"></div>
+
+  <div class="content">
+    <div class="left">
+      <div class="badge">Self-hosted ad blocker</div>
+      <div class="logo">ubl<span class="green">proxy</span></div>
+      <h1>Your browser should<br>work for <em>you</em></h1>
+      <p class="subtitle">Network-wide HTTPS proxy that blocks ads at the HTTP layer. Full Adblock Plus filter support, cosmetic filtering, and passkey auth. Goes where DNS blockers can't.</p>
+    </div>
+
+    <div class="right">
+      <div class="terminal">
+        <div class="terminal-bar">
+          <div class="dot"></div>
+          <div class="dot"></div>
+          <div class="dot"></div>
+          <span>user@ublproxy:~</span>
+        </div>
+        <div class="terminal-body">
+          <span class="comment"># Run with Docker</span><br>
+          <span class="prompt">$</span> <span class="cmd">docker run</span> <span class="flag">-p 8080:8080 -p 8443:8443</span> <span class="cmd">\</span><br>
+          &nbsp;&nbsp;<span class="flag">-v</span> <span class="cmd">ublproxy-data:/data</span> <span class="cmd">\</span><br>
+          &nbsp;&nbsp;<span class="cmd">ghcr.io/andrioid/ublproxy:edge</span><br>
+          <br>
+          <span class="comment"># Portal ready at :8443</span><br>
+          <span class="prompt">$</span> <span class="cmd">curl</span> <span class="flag">-x https://127.0.0.1:8443</span> <span class="cmd">\</span><br>
+          &nbsp;&nbsp;<span class="cmd">https://example.com</span>
+        </div>
+      </div>
+
+      <div class="tags">
+        <span class="tag tag-green">URL-path blocking</span>
+        <span class="tag tag-cyan">Cosmetic filtering</span>
+        <span class="tag tag-magenta">TLS MITM</span>
+        <span class="tag tag-yellow">Passkey auth</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
