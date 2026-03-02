@@ -33,6 +33,10 @@ jobs:
             goarch: amd64
           - goos: darwin
             goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -54,15 +58,23 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          go build -ldflags "-X main.version=${{ steps.version.outputs.version }}" -o ublproxy .
+          EXT=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
+          go build -ldflags "-X main.version=${{ steps.version.outputs.version }}" -o "ublproxy${EXT}" .
 
       - name: Archive
-        run: tar czf "ublproxy-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" ublproxy
+        run: |
+          BASENAME="ublproxy-${{ matrix.goos }}-${{ matrix.goarch }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip "${BASENAME}.zip" ublproxy.exe
+          else
+            tar czf "${BASENAME}.tar.gz" ublproxy
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
           name: ublproxy-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: "ublproxy-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          path: "ublproxy-${{ matrix.goos }}-${{ matrix.goarch }}.*"
 
   release:
     needs: binaries
@@ -90,7 +102,9 @@ jobs:
           name: ${{ steps.version.outputs.version }}
           prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
           generate_release_notes: true
-          files: "*.tar.gz"
+          files: |
+            *.tar.gz
+            *.zip
 
   docker:
     needs: test

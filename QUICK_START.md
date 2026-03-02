@@ -7,6 +7,13 @@ go build -o ublproxy .
 ./ublproxy
 ```
 
+On Windows:
+
+```powershell
+go build -o ublproxy.exe .
+.\ublproxy.exe
+```
+
 ## Run with Docker
 
 ```bash

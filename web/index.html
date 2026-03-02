@@ -30,7 +30,7 @@
   "description": "A self-hosted HTTPS proxy with full Adblock Plus filter support, cosmetic filtering, per-user passkeys, and transparent proxy mode. Block ads at the HTTP layer, not just DNS.",
   "url": "https://andrioid.github.io/ublproxy/",
   "applicationCategory": "NetworkApplication",
-  "operatingSystem": "Linux, macOS",
+  "operatingSystem": "Linux, macOS, Windows",
   "license": "https://github.com/andrioid/ublproxy/blob/main/LICENSE.md",
   "downloadUrl": "https://github.com/andrioid/ublproxy/releases",
   "screenshot": "https://andrioid.github.io/ublproxy/portal-dashboard.png",
@@ -1336,10 +1336,14 @@ td:first-child {
       </div>
       <div class="install-card">
         <h3>Binary</h3>
-        <p>Download a pre-built binary for your platform. Available for Linux and macOS on amd64 and arm64.</p>
+        <p>Download a pre-built binary for your platform. Available for Linux, macOS, and Windows on amd64 and arm64.</p>
         <div class="code-block">
           <span class="prompt">$</span> tar xzf ublproxy-linux-amd64.tar.gz<br>
           <span class="prompt">$</span> ./ublproxy
+        </div>
+        <div class="code-block" style="margin-top:0.5rem">
+          <span class="comment"># Windows (zip archive)</span><br>
+          <span class="prompt">&gt;</span> ublproxy.exe
         </div>
         <a href="https://github.com/andrioid/ublproxy/releases" class="install-link">
           Download from Releases &rarr;
