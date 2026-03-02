@@ -10,13 +10,11 @@ go build -o ublproxy .
 ## Run with Docker
 
 ```bash
-docker build -t ublproxy .
-
 docker run -d \
   -p 8080:8080 \
   -p 8443:8443 \
-  -v ~/.ublproxy:/data \
-  ublproxy
+  -v ublproxy-data:/data \
+  ghcr.io/andrioid/ublproxy:edge
 ```
 
 ### docker-compose.yml
@@ -24,7 +22,7 @@ docker run -d \
 ```yaml
 services:
   ublproxy:
-    build: .
+    image: ghcr.io/andrioid/ublproxy:edge
     ports:
       - "8080:8080"
       - "8443:8443"
@@ -44,7 +42,7 @@ To use custom ports:
 ```yaml
 services:
   ublproxy:
-    build: .
+    image: ghcr.io/andrioid/ublproxy:edge
     ports:
       - "6080:6080"
       - "6443:6443"
@@ -392,7 +390,7 @@ sudo pfctl -e
 ```yaml
 services:
   ublproxy:
-    build: .
+    image: ghcr.io/andrioid/ublproxy:edge
     network_mode: host   # required for transparent proxy
     environment:
       - UBLPROXY_TRANSPARENT=true

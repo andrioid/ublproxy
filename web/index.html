@@ -999,8 +999,8 @@ td:first-child {
         <div class="terminal-body">
           <span class="comment"># Run with Docker</span><br>
           <span class="prompt">$</span> <span class="cmd">docker run</span> <span class="flag">-p 8080:8080 -p 8443:8443</span> <span class="cmd">\</span><br>
-          &nbsp;&nbsp;<span class="flag">-v</span> <span class="cmd">ublproxy-data:/root/.ublproxy</span> <span class="cmd">\</span><br>
-          &nbsp;&nbsp;<span class="cmd">ghcr.io/andrioid/ublproxy:latest</span>
+          &nbsp;&nbsp;<span class="flag">-v</span> <span class="cmd">ublproxy-data:/data</span> <span class="cmd">\</span><br>
+          &nbsp;&nbsp;<span class="cmd">ghcr.io/andrioid/ublproxy:edge</span>
         </div>
       </div>
     </div>
@@ -1289,8 +1289,8 @@ td:first-child {
         <p>Pull the multi-arch image and run:</p>
         <div class="code-block">
           <span class="prompt">$</span> docker run <span class="flag">-p 8080:8080 -p 8443:8443</span> \<br>
-          &nbsp;&nbsp;<span class="flag">-v</span> ublproxy-data:/root/.ublproxy \<br>
-          &nbsp;&nbsp;ghcr.io/andrioid/ublproxy:latest
+          &nbsp;&nbsp;<span class="flag">-v</span> ublproxy-data:/data \<br>
+          &nbsp;&nbsp;ghcr.io/andrioid/ublproxy:edge
         </div>
         <a href="https://github.com/andrioid/ublproxy/blob/main/QUICK_START.md" class="install-link">
           Full setup guide &rarr;
