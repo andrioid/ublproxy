@@ -1,0 +1,11 @@
+graph LR
+    D1["Desktop"] --> P
+    D2["Laptop"] --> P
+    D3["Phone"] --> P
+
+    subgraph P["ublproxy :8443 / :8080"]
+        BL["Blocklist<br/>Engine"]
+        CA["CA + Cert<br/>Cache"]
+    end
+
+    P --> UP["Internet"]

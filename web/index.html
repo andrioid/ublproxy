@@ -666,105 +666,47 @@ section {
   border-top: 1px solid var(--border);
 }
 
-.arch-diagram {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0;
+.arch-modes {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
   max-width: 900px;
   margin: 0 auto;
-  flex-wrap: wrap;
 }
 
-.arch-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-  align-items: center;
-}
-
-.arch-node {
+.arch-mode-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 0.8rem 1.2rem;
+  padding: 1.5rem;
   text-align: center;
-  font-size: 0.8rem;
-  min-width: 100px;
 }
 
-.arch-node-label {
+.arch-mode-card h3 {
   font-family: var(--font-mono);
-  font-weight: 600;
-  font-size: 0.78rem;
-  letter-spacing: -0.01em;
-}
-
-.arch-node-sub {
-  color: var(--text-faint);
-  font-size: 0.7rem;
-  margin-top: 0.2rem;
-}
-
-.arch-proxy {
-  background: rgba(0, 255, 65, 0.06);
-  border-color: rgba(0, 255, 65, 0.3);
-  padding: 1.5rem 2rem;
-  min-width: 180px;
-  box-shadow: 0 0 25px rgba(0, 255, 65, 0.1);
-}
-
-.arch-proxy .arch-node-label {
-  color: var(--accent);
-  font-size: 0.95rem;
-  text-shadow: var(--glow-green);
-}
-
-.arch-arrow {
-  display: flex;
-  align-items: center;
-  padding: 0 1rem;
-  color: var(--cyan);
-  opacity: 0.5;
-  font-family: var(--font-mono);
-  font-size: 1.4rem;
-  flex-shrink: 0;
-}
-
-.arch-features {
-  display: flex;
-  gap: 0.5rem;
-  margin-top: 0.75rem;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-
-.arch-tag {
-  font-family: var(--font-mono);
-  font-size: 0.65rem;
-  padding: 0.2rem 0.5rem;
-  border-radius: var(--radius);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-}
-
-.arch-caption {
-  text-align: center;
-  margin-top: 2.5rem;
-  max-width: 600px;
-  margin-left: auto;
-  margin-right: auto;
-}
-
-.arch-caption p {
-  color: var(--text-muted);
   font-size: 0.88rem;
-  line-height: 1.7;
+  color: var(--green);
+  text-shadow: var(--glow-green);
+  margin-bottom: 1rem;
 }
 
-.arch-caption p + p {
-  margin-top: 0.75rem;
+.arch-mode-card a {
+  display: block;
+}
+
+.arch-mode-card img {
+  width: 100%;
+  border-radius: 4px;
+  transition: filter 0.3s;
+}
+
+.arch-mode-card:hover {
+  border-color: rgba(0, 229, 255, 0.4);
+  box-shadow: 0 0 30px rgba(0, 229, 255, 0.08), 0 0 60px rgba(0, 255, 65, 0.04);
+}
+
+.arch-mode-card:hover img {
+  filter: brightness(1.1);
 }
 
 /* --- Comparison table --- */
@@ -955,13 +897,9 @@ td:first-child {
     gap: 1rem;
   }
 
-  .arch-diagram {
-    flex-direction: column;
-  }
-
-  .arch-arrow {
-    transform: rotate(90deg);
-    padding: 0.5rem 0;
+  .arch-modes {
+    grid-template-columns: 1fr;
+    gap: 1rem;
   }
 
   .install-options {
@@ -1170,59 +1108,38 @@ td:first-child {
   <div class="container">
     <div class="section-header">
       <div class="section-label neon-green">Architecture</div>
-      <h2 class="section-title">Sits between you and the internet</h2>
-      <p class="section-desc">A man-in-the-middle proxy that intercepts, inspects, and modifies HTTP/HTTPS traffic before it reaches your browser.</p>
+      <h2 class="section-title">Three ways to block ads</h2>
+      <p class="section-desc">Full MITM proxy for browsers, transparent interception for managed networks, or DNS-level blocking for everything else.</p>
     </div>
 
-    <div class="arch-diagram">
-      <div class="arch-group">
-        <div class="arch-node">
-          <div class="arch-node-label">Desktop</div>
-          <div class="arch-node-sub">:8443 HTTPS</div>
-        </div>
-        <div class="arch-node">
-          <div class="arch-node-label">Laptop</div>
-          <div class="arch-node-sub">:8443 HTTPS</div>
-        </div>
-        <div class="arch-node">
-          <div class="arch-node-label">Phone</div>
-          <div class="arch-node-sub">:8080 HTTP</div>
-        </div>
-        <div class="arch-node">
-          <div class="arch-node-label">Smart TV / IoT</div>
-          <div class="arch-node-sub">:53 DNS</div>
+    <div class="arch-modes">
+      <div class="arch-mode-card">
+        <h3>Explicit proxy</h3>
+        <a href="arch-explicit.svg" data-lightbox>
+          <img src="arch-explicit.svg" alt="Explicit proxy mode: Desktop, Laptop and Phone connect to ublproxy on ports 8443 and 8080, which forwards to the Internet" loading="lazy">
+        </a>
+        <div class="screenshot-caption">
+          <span class="caption-text"><span class="caption-label">Explicit proxy</span> &mdash; PAC file or manual proxy settings. Full MITM filtering with CSS injection, scriptlets, and resource stripping.</span>
         </div>
       </div>
-
-      <div class="arch-arrow">&rarr;</div>
-
-      <div class="arch-group">
-        <div class="arch-node arch-proxy">
-          <div class="arch-node-label">ublproxy</div>
-          <div class="arch-node-sub" style="color:var(--text-muted)">~16 MB single binary</div>
-          <div class="arch-features">
-            <span class="arch-tag" style="color:var(--green);border-color:rgba(0,255,65,0.2)">Blocklist engine</span>
-            <span class="arch-tag" style="color:var(--magenta);border-color:rgba(255,45,123,0.2)">TLS MITM</span>
-            <span class="arch-tag" style="color:var(--cyan);border-color:rgba(0,229,255,0.2)">CSS + scriptlets</span>
-            <span class="arch-tag" style="color:var(--yellow);border-color:rgba(255,230,0,0.2)">SQLite</span>
-            <span class="arch-tag" style="color:var(--green);border-color:rgba(0,255,65,0.2)">DNS resolver</span>
-          </div>
+      <div class="arch-mode-card">
+        <h3>Transparent proxy</h3>
+        <a href="arch-transparent.svg" data-lightbox>
+          <img src="arch-transparent.svg" alt="Transparent proxy mode: Device traffic is redirected by a firewall to ublproxy, which forwards to the Internet" loading="lazy">
+        </a>
+        <div class="screenshot-caption">
+          <span class="caption-text"><span class="caption-label">Transparent proxy</span> &mdash; Firewall redirects VLAN traffic. No client config needed. Captive portal for CA setup.</span>
         </div>
       </div>
-
-      <div class="arch-arrow">&rarr;</div>
-
-      <div class="arch-group">
-        <div class="arch-node">
-          <div class="arch-node-label">Internet</div>
-          <div class="arch-node-sub">Upstream servers</div>
+      <div class="arch-mode-card">
+        <h3>DNS resolver</h3>
+        <a href="arch-dns.svg" data-lightbox>
+          <img src="arch-dns.svg" alt="DNS resolver mode: Smart TV and IoT devices query ublproxy on port 53, which forwards to upstream DNS" loading="lazy">
+        </a>
+        <div class="screenshot-caption">
+          <span class="caption-text"><span class="caption-label">DNS resolver</span> &mdash; Null-routes blocked hostnames. For devices that can't install a CA certificate.</span>
         </div>
       </div>
-    </div>
-
-    <div class="arch-caption">
-      <p>Desktops and laptops connect over HTTPS on port 8443 via PAC file or manual proxy settings. Mobile devices connect over HTTP on port 8080. Devices that can't install a CA cert (smart TVs, game consoles, IoT) use the built-in DNS resolver on port 53 for host-level blocking. The proxy generates per-host TLS certificates on the fly using its own CA.</p>
-      <p>Blocked resource elements (<code style="background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:2px;font-family:var(--font-mono);font-size:0.85em;border:1px solid var(--border);color:var(--magenta)">&lt;script&gt;</code>, <code style="background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:2px;font-family:var(--font-mono);font-size:0.85em;border:1px solid var(--border);color:var(--magenta)">&lt;iframe&gt;</code>) are stripped from HTML. CSS element-hiding rules are pre-filtered from ~64K global selectors down to &lt;200 per page. Scriptlets are injected to neutralize anti-adblock scripts. Blocked requests can be replaced with neutered placeholders via <code style="background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:2px;font-family:var(--font-mono);font-size:0.85em;border:1px solid var(--border);color:var(--magenta)">$redirect</code>.</p>
     </div>
   </div>
 </section>
@@ -1414,7 +1331,7 @@ td:first-child {
   document.querySelectorAll('a[data-lightbox]').forEach(function (link) {
     link.addEventListener('click', function (e) {
       e.preventDefault();
-      var card = link.closest('.screenshot-card');
+      var card = link.closest('.screenshot-card, .arch-mode-card');
       var captionEl = card ? card.querySelector('.caption-text') : null;
       open(link.href, captionEl ? captionEl.innerHTML : '');
     });

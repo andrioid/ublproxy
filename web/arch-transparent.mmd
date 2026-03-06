@@ -1,0 +1,4 @@
+graph LR
+    D["Device"] --> FW["Firewall"]
+    FW -->|"redirect<br/>:80 + :443"| P["ublproxy"]
+    P --> UP["Internet"]

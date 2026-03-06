@@ -10,72 +10,24 @@ Existing solutions, such as [pihole](https://pi-hole.net/) and other dns-based s
 
 ## Architecture
 
-ublproxy sits between your devices and the internet, intercepting HTTP/HTTPS traffic to block ads and tracking at the network level.
-
-```mermaid
-graph LR
-    subgraph LAN["Local Network"]
-        D1["Desktop"]
-        D2["Laptop"]
-        D3["Phone"]
-        D4["Smart TV /<br/>IoT"]
-    end
-
-    subgraph UBL["ublproxy"]
-        HTTP[":8080<br/>HTTP"]
-        HTTPS[":8443<br/>HTTPS"]
-        DNS[":53<br/>DNS"]
-        BL["Blocklist<br/>Engine"]
-        CA["CA + Cert<br/>Cache"]
-        DB["SQLite<br/>Store"]
-    end
-
-    UP["Upstream<br/>Servers"]
-
-    D1 --> HTTPS
-    D2 --> HTTPS
-    D3 --> HTTP
-    D4 --> DNS
-
-    HTTPS --> BL
-    HTTP --> BL
-    DNS --> BL
-    BL --> CA
-    BL --> UP
-
-    HTTPS --> DB
-```
-
-The proxy operates in one of two modes:
+ublproxy sits between your devices and the internet, intercepting HTTP/HTTPS traffic to block ads and tracking at the network level. It operates in three modes:
 
 ### Explicit proxy mode (default)
 
 Browsers are configured to send traffic through the proxy via PAC files or manual proxy settings.
 
 ```mermaid
-sequenceDiagram
-    participant B as Browser
-    participant P as ublproxy
-    participant U as Upstream
+graph LR
+    D1["Desktop"] --> P
+    D2["Laptop"] --> P
+    D3["Phone"] --> P
 
-    B->>P: CONNECT example.com:443
-    P->>P: Check blocklist
-    alt Blocked
-        P-->>B: 403 Forbidden
-    else Excepted (@@)
-        P->>U: TCP tunnel (passthrough)
-        U-->>B: Direct TLS (no MITM)
-    else Normal
-        P-->>B: 200 OK
-        B->>P: TLS handshake (MITM cert)
-        P->>P: Generate cert for example.com
-        B->>P: GET /page
-        P->>U: GET /page (real TLS)
-        U-->>P: HTML response
-        P->>P: Strip blocked resources
-        P->>P: Inject element-hiding CSS
-        P-->>B: Modified HTML
+    subgraph P["ublproxy :8443 / :8080"]
+        BL["Blocklist<br/>Engine"]
+        CA["CA + Cert<br/>Cache"]
     end
+
+    P --> UP["Internet"]
 ```
 
 ### Transparent proxy mode (`--transparent`)
@@ -83,31 +35,26 @@ sequenceDiagram
 A firewall redirects all traffic from a VLAN to the proxy. No client configuration needed.
 
 ```mermaid
-sequenceDiagram
-    participant D as Device
-    participant FW as Firewall
-    participant P as ublproxy
-    participant U as Upstream
+graph LR
+    D["Device"] --> FW["Firewall"]
+    FW -->|"redirect<br/>:80 + :443"| P["ublproxy"]
+    P --> UP["Internet"]
+```
 
-    Note over D,FW: New device joins VLAN
+### DNS resolver (`--dns-port`)
 
-    D->>FW: HTTP to captive.apple.com
-    FW->>P: Redirect to :8080
-    P->>P: Untrusted client?
-    P-->>D: 302 Redirect to setup page
+For devices that can't install a CA certificate. Blocked hostnames return `0.0.0.0`, everything else is forwarded upstream.
 
-    Note over D: OS shows captive portal UI
-    Note over D: User installs CA cert
+```mermaid
+graph LR
+    D1["Smart TV"] --> P
+    D2["IoT"] --> P
 
-    D->>FW: HTTPS to example.com
-    FW->>P: Redirect to :8443
-    P->>P: Extract SNI from ClientHello
-    P->>P: Generate MITM cert
-    D->>P: TLS handshake (trusts CA)
-    P->>P: Mark client as trusted
-    P->>U: Forward request
-    U-->>P: Response
-    P-->>D: Modified response
+    subgraph P["ublproxy :53"]
+        BL["Blocklist<br/>Engine"]
+    end
+
+    P -->|"forward"| UP["Upstream<br/>DNS"]
 ```
 
 ## Features

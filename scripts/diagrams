@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+#MISE description="Regenerate architecture SVGs from Mermaid sources"
+set -euo pipefail
+
+for src in web/arch-*.mmd; do
+  out="${src%.mmd}.svg"
+  mise exec -- mmdc -i "$src" -o "$out" -c web/mermaid-config.json -b transparent
+  echo "Generated $out"
+done

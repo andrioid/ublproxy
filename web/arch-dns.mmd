@@ -1,0 +1,9 @@
+graph LR
+    D1["Smart TV"] --> P
+    D2["IoT"] --> P
+
+    subgraph P["ublproxy :53"]
+        BL["Blocklist<br/>Engine"]
+    end
+
+    P -->|"forward"| UP["Upstream<br/>DNS"]

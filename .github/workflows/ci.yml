@@ -16,3 +16,25 @@ jobs:
         with:
           go-version: "1.25"
       - run: go test ./...
+
+  diagrams:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install -g @mermaid-js/mermaid-cli
+      - name: Regenerate SVGs
+        run: |
+          for src in web/arch-*.mmd; do
+            out="${src%.mmd}.svg"
+            mmdc -i "$src" -o "$out" -c web/mermaid-config.json -b transparent
+          done
+      - name: Check for uncommitted changes
+        run: |
+          if ! git diff --quiet web/arch-*.svg; then
+            echo "::error::SVG diagrams are out of date. Run 'mise run diagrams' and commit the result."
+            git diff --stat web/arch-*.svg
+            exit 1
+          fi
