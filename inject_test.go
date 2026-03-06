@@ -446,3 +446,161 @@ func TestElementHidingFiltersUnmatchedSelectors(t *testing.T) {
 		t.Error("CSS should NOT contain .nonexistent (not in HTML)")
 	}
 }
+
+func TestScriptletInjection(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("example.com##+js(nowebrtc)")
+	rs.AddLine("example.com##+js(set-constant, ads.enabled, true)")
+
+	p := &proxyHandler{sessions: newSessionMap()}
+	p.baselineRules.Store(rs)
+
+	htmlBody := `<html><head><title>Test</title></head><body><p>Content</p></body></html>`
+	resp := &http.Response{
+		StatusCode: 200,
+		Header:     http.Header{"Content-Type": []string{"text/html"}},
+		Body:       io.NopCloser(strings.NewReader(htmlBody)),
+	}
+
+	modified, stats := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
+	if !stats.Modified {
+		t.Fatal("expected modification for scriptlet injection")
+	}
+
+	body := string(modified)
+
+	// Both scriptlets should be injected as <script> tags
+	if !strings.Contains(body, "RTCPeerConnection") {
+		t.Error("should contain nowebrtc scriptlet (RTCPeerConnection)")
+	}
+	if !strings.Contains(body, "ads.enabled") {
+		t.Error("should contain set-constant scriptlet for ads.enabled")
+	}
+
+	// Scriptlets should be injected before </head> for earliest execution
+	headCloseIdx := strings.Index(body, "</head>")
+	if headCloseIdx < 0 {
+		t.Fatal("should still have </head> tag")
+	}
+	rtcIdx := strings.Index(body, "RTCPeerConnection")
+	if rtcIdx > headCloseIdx {
+		t.Error("scriptlets should be injected before </head>")
+	}
+}
+
+func TestScriptletInjectionNoMatchingDomain(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("other.com##+js(nowebrtc)")
+
+	p := &proxyHandler{sessions: newSessionMap()}
+	p.baselineRules.Store(rs)
+
+	htmlBody := `<html><head></head><body><p>Content</p></body></html>`
+	resp := &http.Response{
+		StatusCode: 200,
+		Header:     http.Header{"Content-Type": []string{"text/html"}},
+		Body:       io.NopCloser(strings.NewReader(htmlBody)),
+	}
+
+	// No scriptlets match example.com, and no CSS rules either
+	_, stats := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
+	if stats.Modified {
+		t.Error("should not modify when no scriptlets or rules match the domain")
+	}
+}
+
+func TestScriptletInjectionSanitizesScriptClose(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	// Argument contains </script> which must be escaped
+	rs.AddLine(`example.com##+js(set-constant, x</script>, true)`)
+
+	p := &proxyHandler{sessions: newSessionMap()}
+	p.baselineRules.Store(rs)
+
+	htmlBody := `<html><head></head><body><p>Content</p></body></html>`
+	resp := &http.Response{
+		StatusCode: 200,
+		Header:     http.Header{"Content-Type": []string{"text/html"}},
+		Body:       io.NopCloser(strings.NewReader(htmlBody)),
+	}
+
+	modified, _ := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
+	body := string(modified)
+
+	// Must not contain raw </script> inside the scriptlet injection
+	// (the closing </script> of the wrapper tag is OK, but not inside the JS)
+	scriptStart := strings.Index(body, "<script>")
+	scriptEnd := strings.Index(body, "</script>")
+	if scriptStart >= 0 && scriptEnd > scriptStart {
+		jsContent := body[scriptStart+len("<script>") : scriptEnd]
+		if strings.Contains(jsContent, "</script") {
+			t.Error("scriptlet JS must not contain unescaped </script>")
+		}
+	}
+}
+
+func TestScriptletInjectionWithCSSRules(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("example.com##+js(nowebrtc)")
+	rs.AddLine("##.ad-banner")
+
+	p := &proxyHandler{sessions: newSessionMap()}
+	p.baselineRules.Store(rs)
+
+	htmlBody := `<html><head></head><body><div class="ad-banner">Ad</div><p>Content</p></body></html>`
+	resp := &http.Response{
+		StatusCode: 200,
+		Header:     http.Header{"Content-Type": []string{"text/html"}},
+		Body:       io.NopCloser(strings.NewReader(htmlBody)),
+	}
+
+	modified, stats := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
+	if !stats.Modified {
+		t.Fatal("expected modification")
+	}
+
+	body := string(modified)
+
+	// Both CSS and scriptlet should be present
+	if !strings.Contains(body, "<style>") {
+		t.Error("should contain CSS style tag")
+	}
+	if !strings.Contains(body, ".ad-banner") {
+		t.Error("should contain CSS selector")
+	}
+	if !strings.Contains(body, "RTCPeerConnection") {
+		t.Error("should contain scriptlet injection")
+	}
+}
+
+func TestScriptletInjectionFromUserRules(t *testing.T) {
+	// User rules should also provide scriptlets
+	userRS := blocklist.NewRuleSet()
+	userRS.AddLine("example.com##+js(nowebrtc)")
+
+	sm := newSessionMap()
+	sm.Set("127.0.0.1", sessionEntry{Token: "tok", CredentialID: "cred-1"})
+
+	p := &proxyHandler{
+		sessions:     sm,
+		portalOrigin: "https://127.0.0.1:8443",
+	}
+	p.userRules.Store("cred-1", userRS)
+
+	htmlBody := `<html><head></head><body><p>Content</p></body></html>`
+	resp := &http.Response{
+		StatusCode: 200,
+		Header:     http.Header{"Content-Type": []string{"text/html"}},
+		Body:       io.NopCloser(strings.NewReader(htmlBody)),
+	}
+
+	modified, stats := p.applyElementHiding(resp, "example.com", "127.0.0.1", false)
+	if !stats.Modified {
+		t.Fatal("expected modification from user scriptlets")
+	}
+
+	body := string(modified)
+	if !strings.Contains(body, "RTCPeerConnection") {
+		t.Error("should contain scriptlet from user rules")
+	}
+}

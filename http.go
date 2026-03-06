@@ -54,9 +54,25 @@ func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := matchContextFromRequest(r)
 	clientIP := clientIPFromRequest(r)
 	credID := p.credentialForIP(clientIP)
+
+	// Apply $removeparam rules to strip tracking query parameters
+	targetURL := p.applyRemoveParams(clientIP, r.URL.String(), ctx)
+	if targetURL != r.URL.String() {
+		parsed, err := url.Parse(targetURL)
+		if err == nil {
+			r.URL = parsed
+		}
+	}
+
 	if p.shouldBlock(clientIP, r.URL.String(), ctx) {
 		p.logActivity(ActivityBlocked, r.URL.Hostname(), r.URL.String(), "", clientIP, credID)
 		logBlocked(r.URL.Hostname(), r.URL.String(), "", clientIP, credID)
+		// Serve neutered resource if a $redirect directive matches
+		if name, ok := p.matchRedirect(clientIP, r.URL.String(), ctx); ok {
+			if serveRedirectResource(w, name) {
+				return
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -86,6 +102,18 @@ func (p *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+
+	// Block based on response headers ($header= rules)
+	if p.shouldBlockByHeader(clientIP, r.URL.String(), ctx, resp.Header) {
+		resp.Body.Close()
+		p.logActivity(ActivityBlocked, r.URL.Hostname(), r.URL.String(), "$header", clientIP, credID)
+		logBlocked(r.URL.Hostname(), r.URL.String(), "$header", clientIP, credID)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// Inject $csp and $permissions response headers
+	p.applyModifierHeaders(resp, clientIP, r.URL.String(), ctx)
 
 	// Replace ad elements in HTML responses (skip HEAD — no body to modify).
 	// If the proxy connection is plain HTTP (r.TLS == nil), skip the
@@ -189,6 +217,7 @@ func (p *proxyHandler) handleHTTPUpgrade(w http.ResponseWriter, r *http.Request)
 func matchContextFromRequest(req *http.Request) blocklist.MatchContext {
 	ctx := blocklist.MatchContext{
 		ResourceType: blocklist.InferResourceType(req),
+		Method:       req.Method,
 	}
 	referer := req.Header.Get("Referer")
 	if referer == "" {

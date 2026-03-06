@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -294,9 +295,24 @@ func (h *transparentHTTPHandler) forwardHTTP(w http.ResponseWriter, r *http.Requ
 	credID := h.proxy.credentialForIP(clientIP)
 
 	ctx := matchContextFromRequest(r)
+
+	// Apply $removeparam rules to strip tracking query parameters
+	if cleaned := h.proxy.applyRemoveParams(clientIP, targetURL, ctx); cleaned != targetURL {
+		targetURL = cleaned
+		if parsed, err := url.Parse(cleaned); err == nil {
+			r.URL = parsed
+		}
+	}
+
 	if h.proxy.shouldBlock(clientIP, targetURL, ctx) {
 		h.proxy.logActivity(ActivityBlocked, host, targetURL, "", clientIP, credID)
 		logBlocked(host, targetURL, "", clientIP, credID)
+		// Serve neutered resource if a $redirect directive matches
+		if name, ok := h.proxy.matchRedirect(clientIP, targetURL, ctx); ok {
+			if serveRedirectResource(w, name) {
+				return
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -326,6 +342,18 @@ func (h *transparentHTTPHandler) forwardHTTP(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	defer resp.Body.Close()
+
+	// Block based on response headers ($header= rules)
+	if h.proxy.shouldBlockByHeader(clientIP, targetURL, ctx, resp.Header) {
+		resp.Body.Close()
+		h.proxy.logActivity(ActivityBlocked, host, targetURL, "$header", clientIP, credID)
+		logBlocked(host, targetURL, "$header", clientIP, credID)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// Inject $csp and $permissions response headers
+	h.proxy.applyModifierHeaders(resp, clientIP, targetURL, ctx)
 
 	insecure := true // transparent HTTP is always insecure
 	if r.Method != http.MethodHead {

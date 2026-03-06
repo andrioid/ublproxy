@@ -115,6 +115,12 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 	hasURLRules := (baseline != nil && (baseline.HostCount() > 0 || baseline.RuleCount() > 0)) ||
 		(userRS != nil && (userRS.HostCount() > 0 || userRS.RuleCount() > 0))
 
+	// Collect scriptlet rules for this domain from both rulesets
+	scriptletTag := buildScriptletTag(
+		baseline.ScriptletsForDomain(host),
+		userRS.ScriptletsForDomain(host),
+	)
+
 	// Generate bootstrap script tag (empty string if no session).
 	// Skip on insecure (plain HTTP) connections to avoid leaking the
 	// session token over unencrypted traffic.
@@ -124,7 +130,7 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 	}
 
 	// Nothing to do if there are no rules AND no script to inject
-	if baselineEH == nil && userEH == nil && !hasURLRules && scriptTag == "" {
+	if baselineEH == nil && userEH == nil && !hasURLRules && scriptTag == "" && scriptletTag == "" {
 		return nil, elementHidingStats{}
 	}
 
@@ -171,10 +177,15 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 	modified, strippedCount := stripBlockedResources(body, sc)
 	stats.Stripped = strippedCount
 
+	// Check cosmetic filter exceptions ($elemhide, $generichide, $specifichide)
+	pageURL := "https://" + host + "/"
+	cosmeticExc := baseline.CosmeticFilterExceptions(pageURL) |
+		userRS.CosmeticFilterExceptions(pageURL)
+
 	// Merge baseline + user element hiding selectors, then filter to only
 	// those that match classes/IDs actually present in the HTML. This avoids
 	// injecting tens of thousands of global selectors that don't apply.
-	allSelectors := mergeElementHidingSelectors(baselineEH, userEH, userRS, host)
+	allSelectors := mergeElementHidingSelectors(baselineEH, userEH, userRS, host, cosmeticExc)
 	selectors := filterSelectors(allSelectors, modified)
 	css := buildElementHidingCSS(selectors)
 	if css != "" {
@@ -185,6 +196,11 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 		rule := truncateRule(strings.Join(selectors, ", "), 80)
 		p.logActivity(ActivityElementHidden, host, "", rule, clientIP, credID)
 		logElementHidden(host, rule, clientIP, credID)
+	}
+
+	// Inject scriptlets before </head> for earliest execution
+	if scriptletTag != "" {
+		modified = injectBeforeClose(modified, []byte(scriptletTag), []byte("</head>"), []byte("</body>"), []byte("</html>"))
 	}
 
 	// Inject the bootstrap script for the element picker
@@ -201,23 +217,46 @@ func (p *proxyHandler) applyElementHiding(resp *http.Response, host, clientIP st
 
 // mergeElementHidingSelectors collects element hiding selectors from baseline
 // and user RuleSets for a specific domain. User #@# exception rules suppress
-// matching baseline ## selectors. Returns nil if no selectors apply.
-func mergeElementHidingSelectors(baseline, user *blocklist.ElementHiding, userRS *blocklist.RuleSet, domain string) []string {
+// matching baseline ## selectors. Cosmetic exceptions ($elemhide, $generichide,
+// $specifichide) are applied to suppress categories of selectors.
+// Returns nil if no selectors apply.
+func mergeElementHidingSelectors(baseline, user *blocklist.ElementHiding, userRS *blocklist.RuleSet, domain string, cosmeticExc blocklist.CosmeticFilter) []string {
+	// $elemhide disables all element hiding
+	if cosmeticExc&blocklist.CosmeticElemHide != 0 {
+		return nil
+	}
+
 	var selectors []string
 
 	// Add baseline selectors, filtering out any excepted by user #@# rules
+	// or cosmetic exception options
 	if baseline != nil {
-		for _, sel := range baseline.Selectors {
-			if userRS != nil && userRS.IsElementHideExcepted(sel, domain) {
-				continue
+		if cosmeticExc&blocklist.CosmeticGenericHide == 0 {
+			for _, sel := range baseline.GenericSelectors {
+				if userRS != nil && userRS.IsElementHideExcepted(sel, domain) {
+					continue
+				}
+				selectors = append(selectors, sel)
 			}
-			selectors = append(selectors, sel)
+		}
+		if cosmeticExc&blocklist.CosmeticSpecificHide == 0 {
+			for _, sel := range baseline.SpecificSelectors {
+				if userRS != nil && userRS.IsElementHideExcepted(sel, domain) {
+					continue
+				}
+				selectors = append(selectors, sel)
+			}
 		}
 	}
 
 	// Add user selectors (their own internal exceptions already applied)
 	if user != nil {
-		selectors = append(selectors, user.Selectors...)
+		if cosmeticExc&blocklist.CosmeticGenericHide == 0 {
+			selectors = append(selectors, user.GenericSelectors...)
+		}
+		if cosmeticExc&blocklist.CosmeticSpecificHide == 0 {
+			selectors = append(selectors, user.SpecificSelectors...)
+		}
 	}
 
 	return selectors
@@ -248,6 +287,40 @@ func buildElementHidingCSS(selectors []string) string {
 		b.WriteString(" {\n  display: none !important;\n}\n")
 	}
 	return b.String()
+}
+
+// buildScriptletTag generates a <script> tag containing all applicable
+// scriptlets for the current page, merged from baseline and user rulesets.
+// Each scriptlet is resolved to JavaScript via ScriptletSource and wrapped
+// in a single <script> tag. Returns empty string if no scriptlets apply.
+func buildScriptletTag(baselineScriptlets, userScriptlets []*blocklist.ScriptletRule) string {
+	if len(baselineScriptlets) == 0 && len(userScriptlets) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	wrote := false
+
+	for _, s := range baselineScriptlets {
+		js := blocklist.ScriptletSource(s.Name, s.Args)
+		if js != "" {
+			b.WriteString(js)
+			wrote = true
+		}
+	}
+	for _, s := range userScriptlets {
+		js := blocklist.ScriptletSource(s.Name, s.Args)
+		if js != "" {
+			b.WriteString(js)
+			wrote = true
+		}
+	}
+
+	if !wrote {
+		return ""
+	}
+
+	return "<script>" + b.String() + "</script>"
 }
 
 // injectBeforeClose inserts content before the first found closing tag,

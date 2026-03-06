@@ -76,12 +76,16 @@ func (p *proxyHandler) getBaselineRules() *blocklist.RuleSet {
 // loading it lazily from the database on first access. Returns nil if the
 // user has no custom rules or subscriptions, or if the store is unavailable.
 func (p *proxyHandler) getUserRules(credentialID string) *blocklist.RuleSet {
-	if credentialID == "" || p.store == nil {
+	if credentialID == "" {
 		return nil
 	}
 
 	if cached, ok := p.userRules.Load(credentialID); ok {
 		return cached.(*blocklist.RuleSet)
+	}
+
+	if p.store == nil {
+		return nil
 	}
 
 	rs := p.loadUserRules(credentialID)
@@ -92,6 +96,9 @@ func (p *proxyHandler) getUserRules(credentialID string) *blocklist.RuleSet {
 // loadUserRules builds a RuleSet from a user's DB rules and subscriptions.
 func (p *proxyHandler) loadUserRules(credentialID string) *blocklist.RuleSet {
 	rs := blocklist.NewRuleSet()
+	rs.OnWarning = func(msg string) {
+		slog.Warn("filter parse", "user", shortUserID(credentialID), "msg", msg)
+	}
 
 	subURLs, err := p.store.ListEnabledSubscriptionURLs(credentialID)
 	if err != nil {
@@ -161,6 +168,109 @@ func (p *proxyHandler) shouldBlock(clientIP, url string, ctx blocklist.MatchCont
 	return false
 }
 
+// matchRedirect checks whether a blocked URL has a $redirect or $redirect-rule
+// directive that provides a neutered resource. Returns the resource name and true
+// if found. The caller should serve the resource instead of 204 No Content.
+func (p *proxyHandler) matchRedirect(clientIP, rawURL string, ctx blocklist.MatchContext) (string, bool) {
+	baseline := p.getBaselineRules()
+	credID := p.credentialForIP(clientIP)
+	userRS := p.getUserRules(credID)
+
+	// Check user rules first (higher priority)
+	if userRS != nil {
+		if name, ok := userRS.MatchRedirect(rawURL, ctx); ok {
+			return name, true
+		}
+	}
+	if baseline != nil {
+		if name, ok := baseline.MatchRedirect(rawURL, ctx); ok {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+// serveRedirectResource writes a neutered resource response. Returns true if
+// the resource was found and served, false if the resource name is unknown.
+func serveRedirectResource(w http.ResponseWriter, resourceName string) bool {
+	res, ok := blocklist.LookupRedirectResource(resourceName)
+	if !ok {
+		return false
+	}
+	if res.ContentType != "" {
+		w.Header().Set("Content-Type", res.ContentType)
+	}
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(res.Body)))
+	w.WriteHeader(http.StatusOK)
+	w.Write(res.Body)
+	return true
+}
+
+// applyRemoveParams strips URL query parameters matched by $removeparam rules.
+// Returns the original URL if no parameters were stripped.
+func (p *proxyHandler) applyRemoveParams(clientIP, rawURL string, ctx blocklist.MatchContext) string {
+	baseline := p.getBaselineRules()
+	credID := p.credentialForIP(clientIP)
+	userRS := p.getUserRules(credID)
+
+	url := rawURL
+	if baseline != nil {
+		url = baseline.ApplyRemoveParams(url, ctx)
+	}
+	if userRS != nil {
+		url = userRS.ApplyRemoveParams(url, ctx)
+	}
+	return url
+}
+
+// shouldBlockByHeader checks whether a response should be blocked based on
+// $header= rules matching the response headers.
+func (p *proxyHandler) shouldBlockByHeader(clientIP, rawURL string, ctx blocklist.MatchContext, respHeaders http.Header) bool {
+	baseline := p.getBaselineRules()
+	credID := p.credentialForIP(clientIP)
+	userRS := p.getUserRules(credID)
+
+	if userRS != nil && userRS.ShouldBlockByHeader(rawURL, ctx, respHeaders) {
+		return true
+	}
+	if baseline != nil && baseline.ShouldBlockByHeader(rawURL, ctx, respHeaders) {
+		return true
+	}
+	return false
+}
+
+// applyModifierHeaders collects $csp and $permissions header values from
+// baseline and user rulesets and injects them into the response headers.
+func (p *proxyHandler) applyModifierHeaders(resp *http.Response, clientIP, rawURL string, ctx blocklist.MatchContext) {
+	baseline := p.getBaselineRules()
+	credID := p.credentialForIP(clientIP)
+	userRS := p.getUserRules(credID)
+
+	// Collect CSP directives from both rulesets
+	var cspValues []string
+	if baseline != nil {
+		cspValues = append(cspValues, baseline.ApplyCSPHeaders(rawURL, ctx)...)
+	}
+	if userRS != nil {
+		cspValues = append(cspValues, userRS.ApplyCSPHeaders(rawURL, ctx)...)
+	}
+	for _, v := range cspValues {
+		resp.Header.Add("Content-Security-Policy", v)
+	}
+
+	// Collect Permissions-Policy directives from both rulesets
+	var permValues []string
+	if baseline != nil {
+		permValues = append(permValues, baseline.ApplyPermissionsHeaders(rawURL, ctx)...)
+	}
+	if userRS != nil {
+		permValues = append(permValues, userRS.ApplyPermissionsHeaders(rawURL, ctx)...)
+	}
+	for _, v := range permValues {
+		resp.Header.Add("Permissions-Policy", v)
+	}
+}
+
 // isHostExcepted checks whether a host has an active @@ exception rule.
 // Used at CONNECT time to decide between MITM and passthrough tunneling.
 func (p *proxyHandler) isHostExcepted(clientIP, host string) bool {
@@ -215,6 +325,9 @@ func (p *proxyHandler) reloadBaseline() {
 	defer p.reloadMu.Unlock()
 
 	rs := blocklist.NewRuleSet()
+	rs.OnWarning = func(msg string) {
+		slog.Debug("filter parse", "msg", msg)
+	}
 
 	// Load static blocklists (CLI --blocklist flags)
 	for _, src := range p.blocklistSources {
@@ -225,7 +338,7 @@ func (p *proxyHandler) reloadBaseline() {
 
 	p.baselineRules.Store(rs)
 	if rs.HostCount() > 0 || rs.RuleCount() > 0 {
-		slog.Info("baseline loaded", "hostnames", rs.HostCount(), "rules", rs.RuleCount())
+		slog.Info("baseline loaded", "hostnames", rs.HostCount(), "rules", rs.RuleCount(), "parse_errors", rs.ParseErrors())
 	}
 }
 

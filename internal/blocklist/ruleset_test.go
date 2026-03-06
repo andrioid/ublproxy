@@ -447,3 +447,264 @@ func BenchmarkShouldBlockEasyList(b *testing.B) {
 		}
 	})
 }
+
+func TestImportantOverridesException(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+
+	// Block google-analytics, add an exception, then override with $important
+	rs.AddLine("||google-analytics.com^")
+	rs.AddLine("@@||google-analytics.com^")
+	rs.AddLine("||google-analytics.com^$important,third-party")
+
+	ctx := blocklist.MatchContext{PageDomain: "example.com"}
+
+	// $important should override the exception for third-party requests
+	if !rs.ShouldBlockRequest("https://google-analytics.com/analytics.js", ctx) {
+		t.Error("$important,third-party should override exception for cross-origin requests")
+	}
+
+	// Same-origin should not be blocked (the $important rule has $third-party)
+	ctx = blocklist.MatchContext{PageDomain: "google-analytics.com"}
+	if rs.ShouldBlockRequest("https://google-analytics.com/analytics.js", ctx) {
+		t.Error("$important,third-party should not block same-origin requests")
+	}
+}
+
+func TestImportantWithoutException(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||tracker.com^$important")
+
+	// $important without an exception should just block normally
+	if !rs.ShouldBlock("https://tracker.com/track") {
+		t.Error("$important should block")
+	}
+}
+
+func TestBadfilterDisablesRule(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.example.com^")
+	rs.AddLine("||ads.example.com^$badfilter")
+
+	if rs.ShouldBlock("https://ads.example.com/banner.gif") {
+		t.Error("$badfilter should disable the matching block rule")
+	}
+}
+
+func TestBadfilterWithOptions(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||tracker.com^$third-party")
+	rs.AddLine("||tracker.com^$third-party,badfilter")
+
+	ctx := blocklist.MatchContext{PageDomain: "example.com"}
+	if rs.ShouldBlockRequest("https://tracker.com/collect", ctx) {
+		t.Error("$badfilter should disable the matching block rule with options")
+	}
+}
+
+func TestBadfilterDisablesException(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.example.com^")
+	rs.AddLine("@@||ads.example.com^")
+	rs.AddLine("@@||ads.example.com^$badfilter")
+
+	// The exception is badfiltered, so the block rule should take effect
+	if !rs.ShouldBlock("https://ads.example.com/banner.gif") {
+		t.Error("$badfilter on exception should re-enable the block rule")
+	}
+}
+
+func TestBadfilterSubstringInURL(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	// "badfilter" appears in the URL pattern, not as an option
+	rs.AddLine("||badfilter.example.com^")
+
+	if !rs.ShouldBlock("https://badfilter.example.com/page") {
+		t.Error("badfilter in URL pattern should not be treated as $badfilter option")
+	}
+}
+
+func TestBadfilterNoEffectOnNonMatching(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	rs.AddLine("||ads.example.com^")
+	rs.AddLine("||other.com^$badfilter") // doesn't match the rule above
+
+	if !rs.ShouldBlock("https://ads.example.com/banner.gif") {
+		t.Error("$badfilter on a different rule should not affect ads.example.com")
+	}
+}
+
+func TestParseErrorsCountAndWarning(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+
+	var warnings []string
+	rs.OnWarning = func(msg string) {
+		warnings = append(warnings, msg)
+	}
+
+	rs.AddLine("||good.com^")
+	rs.AddLine("/[invalid/")    // bad regex
+	rs.AddLine("@@/[also-bad/") // bad regex in exception
+	rs.AddLine("||also-good.com^")
+
+	if rs.ParseErrors() != 2 {
+		t.Errorf("ParseErrors() = %d, want 2", rs.ParseErrors())
+	}
+	if len(warnings) != 2 {
+		t.Errorf("got %d warnings, want 2", len(warnings))
+	}
+	// Valid rules should still work
+	if !rs.ShouldBlock("https://good.com/page") {
+		t.Error("valid rule should still block")
+	}
+	if !rs.ShouldBlock("https://also-good.com/page") {
+		t.Error("valid rule added after bad regex should still block")
+	}
+}
+
+func TestPreparseIfDirective(t *testing.T) {
+	// !#if false should skip the enclosed block
+	rs := blocklist.NewRuleSet()
+	err := rs.LoadReader(strings.NewReader(`||always-blocked.com^
+!#if false
+||should-be-skipped.com^
+!#endif
+||also-blocked.com^
+`))
+	if err != nil {
+		t.Fatalf("LoadReader: %v", err)
+	}
+
+	if !rs.ShouldBlock("https://always-blocked.com/page") {
+		t.Error("rule before !#if should be active")
+	}
+	if rs.ShouldBlock("https://should-be-skipped.com/page") {
+		t.Error("rule inside !#if false should be skipped")
+	}
+	if !rs.ShouldBlock("https://also-blocked.com/page") {
+		t.Error("rule after !#endif should be active")
+	}
+}
+
+func TestPreparseIfElseDirective(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	err := rs.LoadReader(strings.NewReader(`!#if false
+||skipped.com^
+!#else
+||included.com^
+!#endif
+`))
+	if err != nil {
+		t.Fatalf("LoadReader: %v", err)
+	}
+
+	if rs.ShouldBlock("https://skipped.com/page") {
+		t.Error("rule in false branch should be skipped")
+	}
+	if !rs.ShouldBlock("https://included.com/page") {
+		t.Error("rule in else branch should be included")
+	}
+}
+
+func TestPreparseIfNegation(t *testing.T) {
+	// !#if !false evaluates to true
+	rs := blocklist.NewRuleSet()
+	err := rs.LoadReader(strings.NewReader(`!#if !false
+||included.com^
+!#endif
+`))
+	if err != nil {
+		t.Fatalf("LoadReader: %v", err)
+	}
+
+	if !rs.ShouldBlock("https://included.com/page") {
+		t.Error("rule in !#if !false should be included")
+	}
+}
+
+func TestPreparseIfEnvTokens(t *testing.T) {
+	// env_chromium is false for a proxy
+	rs := blocklist.NewRuleSet()
+	err := rs.LoadReader(strings.NewReader(`!#if env_chromium
+||chromium-only.com^
+!#endif
+!#if cap_html_filtering
+||html-filter.com^
+!#endif
+`))
+	if err != nil {
+		t.Fatalf("LoadReader: %v", err)
+	}
+
+	if rs.ShouldBlock("https://chromium-only.com/page") {
+		t.Error("env_chromium should be false for proxy")
+	}
+	if !rs.ShouldBlock("https://html-filter.com/page") {
+		t.Error("cap_html_filtering should be true for proxy")
+	}
+}
+
+func TestPreparseIfNested(t *testing.T) {
+	// Nested !#if blocks
+	rs := blocklist.NewRuleSet()
+	err := rs.LoadReader(strings.NewReader(`!#if ext_ublock
+||outer-true.com^
+!#if false
+||inner-false.com^
+!#endif
+||after-inner.com^
+!#endif
+`))
+	if err != nil {
+		t.Fatalf("LoadReader: %v", err)
+	}
+
+	if !rs.ShouldBlock("https://outer-true.com/page") {
+		t.Error("outer true block should be active")
+	}
+	if rs.ShouldBlock("https://inner-false.com/page") {
+		t.Error("inner false block should be skipped")
+	}
+	if !rs.ShouldBlock("https://after-inner.com/page") {
+		t.Error("rule after inner !#endif should be active")
+	}
+}
+
+func TestPreparseIfLogicalOperators(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+	err := rs.LoadReader(strings.NewReader(`!#if ext_ublock && cap_html_filtering
+||both-true.com^
+!#endif
+!#if ext_ublock && env_firefox
+||one-false.com^
+!#endif
+!#if false || ext_ublock
+||or-true.com^
+!#endif
+`))
+	if err != nil {
+		t.Fatalf("LoadReader: %v", err)
+	}
+
+	if !rs.ShouldBlock("https://both-true.com/page") {
+		t.Error("true && true should be true")
+	}
+	if rs.ShouldBlock("https://one-false.com/page") {
+		t.Error("true && false should be false")
+	}
+	if !rs.ShouldBlock("https://or-true.com/page") {
+		t.Error("false || true should be true")
+	}
+}
+
+func TestImportantHostnameRule(t *testing.T) {
+	rs := blocklist.NewRuleSet()
+
+	// $important on a hostname rule — should NOT go to hostname fast path
+	// because it needs option evaluation
+	rs.AddLine("||analytics.com^$important")
+	rs.AddLine("@@||analytics.com^")
+
+	if !rs.ShouldBlock("https://analytics.com/collect") {
+		t.Error("$important should override the exception")
+	}
+}

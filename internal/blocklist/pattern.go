@@ -2,6 +2,8 @@ package blocklist
 
 import (
 	"errors"
+	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -44,20 +46,60 @@ const (
 type MatchContext struct {
 	PageDomain   string       // domain of the page that initiated the request (from Referer)
 	ResourceType ResourceType // type of the network request (0 = unknown, matches any)
+	Method       string       // HTTP method (GET, POST, etc.) for $method option (empty = match any)
 }
 
 // Options holds parsed filter options from the $... suffix of a rule.
+// CosmeticFilter is a bitmask indicating which cosmetic filtering an exception disables.
+type CosmeticFilter uint8
+
+const (
+	CosmeticElemHide     CosmeticFilter = 1 << iota // $elemhide: disable all element hiding
+	CosmeticGenericHide                             // $generichide: disable generic selectors
+	CosmeticSpecificHide                            // $specifichide: disable domain-specific selectors
+)
+
+// HeaderOpt represents a parsed $header= option.
+// It specifies which response header to check and how to match its value.
+type HeaderOpt struct {
+	Name    string         // header name (lowercased)
+	Value   string         // literal value to match (empty = presence check only)
+	Re      *regexp.Regexp // compiled regex for /regex/ values
+	Negated bool           // true if value was prefixed with ~ (match must fail)
+}
+
 type Options struct {
-	MatchCase      bool         // $match-case: case-sensitive matching
-	ThirdParty     *bool        // $third-party (true) or $~third-party (false), nil if unset
-	IncludeDomains []string     // $domain=example.com|other.com
-	ExcludeDomains []string     // $domain=~example.com
-	IncludeTypes   ResourceType // bitmask of types this rule applies to (0 = all types)
-	ExcludeTypes   ResourceType // bitmask of negated types ($~script, $~image)
+	MatchCase      bool           // $match-case: case-sensitive matching
+	Important      bool           // $important: overrides exception filters
+	BadFilter      bool           // $badfilter: disables the matching rule
+	CosmeticOpt    CosmeticFilter // bitmask of cosmetic filtering options
+	ThirdParty     *bool          // $third-party (true) or $~third-party (false), nil if unset
+	IncludeDomains []string       // $domain=example.com|other.com
+	ExcludeDomains []string       // $domain=~example.com
+	DenyAllow      []string       // $denyallow=x.com|y.com: exempt these request destinations
+	IncludeTo      []string       // $to=tracker.com: restrict to these request destinations
+	ExcludeTo      []string       // $to=~example.com: exclude these request destinations
+	RemoveParam    string         // $removeparam=name or $removeparam=/regex/ (empty = all params)
+	RemoveParamAll bool           // true if $removeparam with no value (strip all)
+	RemoveParamRe  *regexp.Regexp // compiled regex for $removeparam=/regex/
+	CSP            string         // $csp=directive: Content-Security-Policy header to inject
+	CSPAll         bool           // true if $csp with no value (blanket exception marker)
+	Permissions    string         // $permissions=directive: Permissions-Policy header to inject
+	PermissionsAll bool           // true if $permissions with no value (blanket exception marker)
+	Header         *HeaderOpt     // $header=name:value — block based on response header
+	Redirect       string         // $redirect=resource: block and serve neutered resource
+	RedirectRule   string         // $redirect-rule=resource: redirect only if independently blocked
+	RedirectAll    bool           // true if $redirect-rule with no value (blanket exception marker)
+	IncludeMethods uint16         // $method=post|get: bitmask of allowed methods
+	ExcludeMethods uint16         // $method=~get: bitmask of excluded methods
+	IncludeTypes   ResourceType   // bitmask of types this rule applies to (0 = all types)
+	ExcludeTypes   ResourceType   // bitmask of negated types ($~script, $~image)
 }
 
 // Rule represents a compiled adblock filter pattern.
 type Rule struct {
+	raw          string         // original filter string for $badfilter matching
+	regex        *regexp.Regexp // compiled regex for /regex/ patterns (nil for non-regex)
 	segments     []segment
 	anchorStart  bool      // |  at start: must match beginning of URL
 	anchorEnd    bool      // |  at end: must match end of URL
@@ -73,7 +115,7 @@ func Compile(pattern string) (*Rule, error) {
 		return nil, errors.New("empty pattern")
 	}
 
-	r := &Rule{}
+	r := &Rule{raw: pattern}
 
 	// Extract $options suffix before processing the pattern
 	if idx := strings.LastIndexByte(pattern, '$'); idx >= 0 {
@@ -84,6 +126,20 @@ func Compile(pattern string) (*Rule, error) {
 
 	if pattern == "" {
 		return nil, errors.New("empty pattern after options")
+	}
+
+	// Handle regex patterns: /regex/
+	if len(pattern) >= 2 && pattern[0] == '/' && pattern[len(pattern)-1] == '/' {
+		expr := pattern[1 : len(pattern)-1]
+		if !r.options.MatchCase {
+			expr = "(?i)" + expr
+		}
+		re, err := regexp.Compile(expr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid regex %q: %w", pattern, err)
+		}
+		r.regex = re
+		return r, nil
 	}
 
 	// Handle domain anchor (||)
@@ -109,18 +165,46 @@ func Compile(pattern string) (*Rule, error) {
 	return r, nil
 }
 
+// HTTP method bitmask constants for $method option.
+const (
+	methodConnect uint16 = 1 << iota
+	methodDelete
+	methodGet
+	methodHead
+	methodOptions
+	methodPatch
+	methodPost
+	methodPut
+)
+
+var httpMethodBit = map[string]uint16{
+	"connect": methodConnect,
+	"delete":  methodDelete,
+	"get":     methodGet,
+	"head":    methodHead,
+	"options": methodOptions,
+	"patch":   methodPatch,
+	"post":    methodPost,
+	"put":     methodPut,
+}
+
 // resourceTypeOption maps adblock option names to ResourceType constants.
 var resourceTypeOption = map[string]ResourceType{
 	"document":          ResourceDocument,
+	"doc":               ResourceDocument, // uBO alias
 	"script":            ResourceScript,
 	"stylesheet":        ResourceStylesheet,
+	"css":               ResourceStylesheet, // uBO alias
 	"image":             ResourceImage,
 	"font":              ResourceFont,
 	"xmlhttprequest":    ResourceXMLHTTPRequest,
+	"xhr":               ResourceXMLHTTPRequest, // uBO alias
 	"subdocument":       ResourceSubdocument,
+	"frame":             ResourceSubdocument, // uBO alias
 	"media":             ResourceMedia,
 	"websocket":         ResourceWebSocket,
 	"object":            ResourceObject,
+	"ping":              ResourceOther, // navigator.sendBeacon / <a ping>
 	"popup":             ResourcePopup,
 	"other":             ResourceOther,
 	"object-subrequest": ResourceObject, // legacy alias
@@ -148,17 +232,32 @@ func parseOptions(optStr string) Options {
 			continue
 		}
 
+		// Noop placeholder (_) used for readability or regex disambiguation
+		if strings.Trim(opt, "_") == "" {
+			continue
+		}
+
 		switch {
 		case opt == "match-case":
 			opts.MatchCase = true
-		case opt == "third-party":
+		case opt == "important":
+			opts.Important = true
+		case opt == "badfilter":
+			opts.BadFilter = true
+		case opt == "third-party" || opt == "3p":
 			tp := true
 			opts.ThirdParty = &tp
-		case opt == "~third-party":
+		case opt == "~third-party" || opt == "first-party" || opt == "1p":
 			tp := false
 			opts.ThirdParty = &tp
-		case strings.HasPrefix(opt, "domain="):
-			domains := strings.Split(opt[7:], "|")
+		case opt == "all":
+			opts.IncludeTypes = ResourceDocument | ResourceScript | ResourceStylesheet |
+				ResourceImage | ResourceFont | ResourceXMLHTTPRequest | ResourceSubdocument |
+				ResourceMedia | ResourceWebSocket | ResourceObject | ResourcePopup | ResourceOther
+		case strings.HasPrefix(opt, "domain=") || strings.HasPrefix(opt, "from="):
+			// $from= is an alias for $domain=
+			val := opt[strings.IndexByte(opt, '=')+1:]
+			domains := strings.Split(val, "|")
 			for _, d := range domains {
 				d = strings.TrimSpace(d)
 				if strings.HasPrefix(d, "~") {
@@ -167,11 +266,122 @@ func parseOptions(optStr string) Options {
 					opts.IncludeDomains = append(opts.IncludeDomains, strings.ToLower(d))
 				}
 			}
+		case strings.HasPrefix(opt, "denyallow="):
+			domains := strings.Split(opt[len("denyallow="):], "|")
+			for _, d := range domains {
+				d = strings.TrimSpace(d)
+				if d != "" {
+					opts.DenyAllow = append(opts.DenyAllow, strings.ToLower(d))
+				}
+			}
+		case strings.HasPrefix(opt, "to="):
+			domains := strings.Split(opt[len("to="):], "|")
+			for _, d := range domains {
+				d = strings.TrimSpace(d)
+				if d == "" {
+					continue
+				}
+				if strings.HasPrefix(d, "~") {
+					opts.ExcludeTo = append(opts.ExcludeTo, strings.ToLower(d[1:]))
+				} else {
+					opts.IncludeTo = append(opts.IncludeTo, strings.ToLower(d))
+				}
+			}
+		case strings.HasPrefix(opt, "method="):
+			methods := strings.Split(opt[len("method="):], "|")
+			for _, m := range methods {
+				m = strings.TrimSpace(strings.ToLower(m))
+				if strings.HasPrefix(m, "~") {
+					if bit, ok := httpMethodBit[m[1:]]; ok {
+						opts.ExcludeMethods |= bit
+					}
+				} else {
+					if bit, ok := httpMethodBit[m]; ok {
+						opts.IncludeMethods |= bit
+					}
+				}
+			}
+		case opt == "removeparam":
+			opts.RemoveParamAll = true
+		case strings.HasPrefix(opt, "removeparam="):
+			val := opt[len("removeparam="):]
+			if len(val) >= 2 && val[0] == '/' && val[len(val)-1] == '/' {
+				re, err := regexp.Compile(val[1 : len(val)-1])
+				if err == nil {
+					opts.RemoveParamRe = re
+				}
+			}
+			opts.RemoveParam = val
+		case opt == "elemhide" || opt == "ehide":
+			opts.CosmeticOpt |= CosmeticElemHide
+		case opt == "generichide" || opt == "ghide":
+			opts.CosmeticOpt |= CosmeticGenericHide
+		case opt == "specifichide" || opt == "shide":
+			opts.CosmeticOpt |= CosmeticSpecificHide
+		case opt == "csp":
+			opts.CSPAll = true
+		case strings.HasPrefix(opt, "csp="):
+			opts.CSP = opt[len("csp="):]
+		case opt == "permissions":
+			opts.PermissionsAll = true
+		case strings.HasPrefix(opt, "permissions="):
+			// Per uBO spec, | is used as separator, converted to ", " internally
+			val := opt[len("permissions="):]
+			opts.Permissions = strings.ReplaceAll(val, "|", ", ")
+		case opt == "header":
+			// Blanket $header in exception filters disables all header-based blocking
+			opts.Header = &HeaderOpt{}
+		case strings.HasPrefix(opt, "header="):
+			val := opt[len("header="):]
+			opts.Header = parseHeaderOpt(val)
+		case strings.HasPrefix(opt, "redirect="):
+			opts.Redirect = opt[len("redirect="):]
+		case opt == "redirect-rule":
+			opts.RedirectAll = true
+		case strings.HasPrefix(opt, "redirect-rule="):
+			opts.RedirectRule = opt[len("redirect-rule="):]
+		case opt == "empty":
+			// Deprecated: $empty is alias for $redirect=empty
+			opts.Redirect = "empty"
+		case opt == "mp4":
+			// Deprecated: $mp4 is alias for $redirect=noopmp4-1s,$media
+			opts.Redirect = "noopmp4-1s"
+			opts.IncludeTypes |= ResourceMedia
 			// Silently ignore options we can't enforce at proxy level:
-			// $csp=, $rewrite=, $generichide, $genericblock, $elemhide
+			// $rewrite=, $genericblock
 		}
 	}
 	return opts
+}
+
+// parseHeaderOpt parses a $header= value into a HeaderOpt.
+// Formats: "name", "name:value", "name:~value", "name:/regex/"
+func parseHeaderOpt(val string) *HeaderOpt {
+	h := &HeaderOpt{}
+	colonIdx := strings.IndexByte(val, ':')
+	if colonIdx < 0 {
+		// Presence check only: $header=via
+		h.Name = strings.ToLower(val)
+		return h
+	}
+
+	h.Name = strings.ToLower(val[:colonIdx])
+	value := val[colonIdx+1:]
+
+	if strings.HasPrefix(value, "~") {
+		h.Negated = true
+		value = value[1:]
+	}
+
+	if len(value) >= 2 && value[0] == '/' && value[len(value)-1] == '/' {
+		re, err := regexp.Compile(value[1 : len(value)-1])
+		if err == nil {
+			h.Re = re
+		}
+	}
+
+	h.Value = value
+	return h
 }
 
 // compileDomainAnchor handles ||domain.com/path patterns.
@@ -235,6 +445,9 @@ func compileSegments(pattern string, matchCase bool) []segment {
 // Does not evaluate context-dependent options ($third-party, $domain).
 // Use MatchWithContext for full option evaluation.
 func (r *Rule) Match(rawURL string) bool {
+	if r.regex != nil {
+		return r.regex.MatchString(rawURL)
+	}
 	url := rawURL
 	if !r.options.MatchCase {
 		url = strings.ToLower(rawURL)
@@ -296,8 +509,16 @@ func (r *Rule) MatchWithContext(rawURL string, ctx MatchContext) bool {
 
 // matchWithContextLower matches using a pre-lowercased URL to avoid redundant
 // ToLower calls when checking many rules against the same URL. The rawURL is
-// needed for $match-case rules which must compare against the original case.
+// needed for $match-case rules and regex rules which must compare against the
+// original case.
 func (r *Rule) matchWithContextLower(rawURL, lowerURL string, ctx MatchContext) bool {
+	if r.regex != nil {
+		// Regex handles its own case sensitivity via (?i) flag
+		if !r.regex.MatchString(rawURL) {
+			return false
+		}
+		return r.checkOptionsLower(lowerURL, ctx)
+	}
 	if r.options.MatchCase {
 		// $match-case needs the original-case URL
 		if !r.matchURL(rawURL) {
@@ -317,6 +538,13 @@ func (r *Rule) DomainAnchor() bool { return r.domainAnchor }
 // DomainSuffix returns the domain part of a || domain-anchored rule (e.g. "example.com").
 func (r *Rule) DomainSuffix() string { return r.domainSuffix }
 
+// Important returns true if the rule has the $important option,
+// meaning it should override exception filters.
+func (r *Rule) Important() bool { return r.options.Important }
+
+// CosmeticOpt returns the cosmetic filter bitmask for this rule.
+func (r *Rule) CosmeticOpt() CosmeticFilter { return r.options.CosmeticOpt }
+
 // HasContextOptions returns true if the rule has options that require
 // a MatchContext to evaluate (e.g. $third-party, $domain, $script).
 func (r *Rule) HasContextOptions() bool {
@@ -332,6 +560,7 @@ func (r *Rule) checkOptions(rawURL string, ctx MatchContext) bool {
 	lowerCtx := MatchContext{
 		PageDomain:   strings.ToLower(ctx.PageDomain),
 		ResourceType: ctx.ResourceType,
+		Method:       strings.ToUpper(ctx.Method),
 	}
 	return r.checkOptionsLower(lowerURL, lowerCtx)
 }
@@ -382,16 +611,82 @@ func (r *Rule) checkOptionsLower(lowerURL string, ctx MatchContext) bool {
 		}
 	}
 
+	// $denyallow: exempt requests to these destination domains
+	if len(r.options.DenyAllow) > 0 {
+		requestDomain := extractHostFromURL(lowerURL)
+		for _, d := range r.options.DenyAllow {
+			if domainMatchesOrIsSubdomain(requestDomain, d) {
+				return false
+			}
+		}
+	}
+
+	// $to: restrict to specific request destination domains
+	if len(r.options.IncludeTo) > 0 {
+		requestDomain := extractHostFromURL(lowerURL)
+		matched := false
+		for _, d := range r.options.IncludeTo {
+			if domainMatchesOrIsSubdomain(requestDomain, d) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	if len(r.options.ExcludeTo) > 0 {
+		requestDomain := extractHostFromURL(lowerURL)
+		for _, d := range r.options.ExcludeTo {
+			if domainMatchesOrIsSubdomain(requestDomain, d) {
+				return false
+			}
+		}
+	}
+
+	// $method: filter by HTTP method
+	if ctx.Method != "" {
+		methodLower := strings.ToLower(ctx.Method)
+		if bit, ok := httpMethodBit[methodLower]; ok {
+			if r.options.IncludeMethods != 0 && r.options.IncludeMethods&bit == 0 {
+				return false
+			}
+			if r.options.ExcludeMethods != 0 && r.options.ExcludeMethods&bit != 0 {
+				return false
+			}
+		}
+	}
+
 	return true
 }
 
 // domainMatchesOrIsSubdomain returns true if domain equals target
-// or is a subdomain of target.
+// or is a subdomain of target. If target is an entity pattern (ending
+// with ".*"), matches any TLD variant.
 func domainMatchesOrIsSubdomain(domain, target string) bool {
+	// Entity matching: "google.*" matches google.com, google.co.uk, sub.google.de, etc.
+	if strings.HasSuffix(target, ".*") {
+		entity := target[:len(target)-2] // "google"
+		return domainMatchesEntity(domain, entity)
+	}
+
 	if domain == target {
 		return true
 	}
 	return strings.HasSuffix(domain, "."+target)
+}
+
+// domainMatchesEntity checks if domain matches an entity pattern.
+// Entity "google" matches: google.com, google.co.uk, sub.google.com, etc.
+// It checks if the domain is "entity.something" or "sub.entity.something"
+// at a domain boundary.
+func domainMatchesEntity(domain, entity string) bool {
+	// Direct: google.com → domain starts with "google." and has at least one more part
+	if strings.HasPrefix(domain, entity+".") {
+		return true
+	}
+	// Subdomain: sub.google.com → domain contains ".google." as a segment boundary
+	return strings.Contains(domain, "."+entity+".")
 }
 
 // matchDomainAnchor checks if the URL contains the domain at a domain boundary

@@ -7,7 +7,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
+
+	"ublproxy/internal/blocklist"
 )
 
 func (p *proxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
@@ -147,17 +150,39 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port, clientI
 		// URL-level blocking for pattern rules (hostname was already
 		// checked at CONNECT time; this catches path-specific rules)
 		ctx := matchContextFromRequest(req)
+
+		// Apply $removeparam rules to strip tracking query parameters
+		if cleaned := p.applyRemoveParams(clientIP, targetURL, ctx); cleaned != targetURL {
+			targetURL = cleaned
+			if parsed, err := url.Parse(cleaned); err == nil {
+				req.URL = parsed
+			}
+		}
+
 		if p.shouldBlock(clientIP, targetURL, ctx) {
 			p.logActivity(ActivityBlocked, host, targetURL, "", clientIP, credID)
 			logBlocked(host, targetURL, "", clientIP, credID)
 			req.Body.Close()
-			blocked := &http.Response{
+
+			// Serve neutered resource if a $redirect directive matches
+			resp := &http.Response{
 				StatusCode: http.StatusNoContent,
 				ProtoMajor: 1,
 				ProtoMinor: 1,
 				Header:     make(http.Header),
 			}
-			blocked.Write(clientTLS)
+			if name, ok := p.matchRedirect(clientIP, targetURL, ctx); ok {
+				if res, found := blocklist.LookupRedirectResource(name); found {
+					resp.StatusCode = http.StatusOK
+					if res.ContentType != "" {
+						resp.Header.Set("Content-Type", res.ContentType)
+					}
+					resp.Body = io.NopCloser(bytes.NewReader(res.Body))
+					resp.ContentLength = int64(len(res.Body))
+				}
+			}
+
+			resp.Write(clientTLS)
 			continue
 		}
 
@@ -202,6 +227,24 @@ func (p *proxyHandler) proxyTLSRequests(clientTLS *tls.Conn, host, port, clientI
 			bidirectionalCopy(&readerWriter{r: clientReader, w: clientTLS}, upstreamConn)
 			return
 		}
+
+		// Block based on response headers ($header= rules)
+		if p.shouldBlockByHeader(clientIP, targetURL, ctx, resp.Header) {
+			resp.Body.Close()
+			p.logActivity(ActivityBlocked, host, targetURL, "$header", clientIP, credID)
+			logBlocked(host, targetURL, "$header", clientIP, credID)
+			blocked := &http.Response{
+				StatusCode: http.StatusNoContent,
+				ProtoMajor: 1,
+				ProtoMinor: 1,
+				Header:     make(http.Header),
+			}
+			blocked.Write(clientTLS)
+			continue
+		}
+
+		// Inject $csp and $permissions response headers
+		p.applyModifierHeaders(resp, clientIP, targetURL, ctx)
 
 		// Replace ad elements in HTML responses (skip HEAD — no body to modify)
 		if req.Method != http.MethodHead {
