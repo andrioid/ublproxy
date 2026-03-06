@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ublproxy - Network-wide ad-blocking HTTPS proxy</title>
-<meta name="description" content="A self-hosted HTTPS proxy with full Adblock Plus filter support, cosmetic filtering, per-user passkeys, and transparent proxy mode. Block ads at the HTTP layer, not just DNS.">
+<meta name="description" content="A self-hosted HTTPS proxy with Adblock Plus and uBlock Origin filter support, scriptlet injection, cosmetic filtering, per-user passkeys, and transparent proxy mode. Block ads at the HTTP layer, not just DNS.">
 <link rel="canonical" href="https://andrioid.github.io/ublproxy/">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <script defer src="https://umami.andri.dk/script.js" data-website-id="2e69db56-f2b2-4590-9c5a-e46f294c6c2c"></script>
 <meta property="og:title" content="ublproxy - Network-wide ad-blocking HTTPS proxy">
-<meta property="og:description" content="Self-hosted HTTPS proxy with Adblock Plus filter support, cosmetic filtering, and passkey authentication. Goes where DNS blockers can't.">
+<meta property="og:description" content="Self-hosted HTTPS proxy with Adblock Plus and uBlock Origin filter support, scriptlet injection, cosmetic filtering, and passkey authentication. Goes where DNS blockers can't.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://andrioid.github.io/ublproxy/">
 <meta property="og:image" content="https://andrioid.github.io/ublproxy/og-image.png">
@@ -19,7 +19,7 @@
 <meta property="og:site_name" content="ublproxy">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="ublproxy - Network-wide ad-blocking HTTPS proxy">
-<meta name="twitter:description" content="Self-hosted HTTPS proxy with Adblock Plus filter support, cosmetic filtering, and passkey authentication. Goes where DNS blockers can't.">
+<meta name="twitter:description" content="Self-hosted HTTPS proxy with Adblock Plus and uBlock Origin filter support, scriptlet injection, cosmetic filtering, and passkey authentication. Goes where DNS blockers can't.">
 <meta name="twitter:image" content="https://andrioid.github.io/ublproxy/og-image.png">
 <meta name="twitter:image:alt" content="ublproxy - self-hosted HTTPS ad-blocking proxy with terminal showing docker run command">
 <script type="application/ld+json">
@@ -27,7 +27,7 @@
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   "name": "ublproxy",
-  "description": "A self-hosted HTTPS proxy with full Adblock Plus filter support, cosmetic filtering, per-user passkeys, and transparent proxy mode. Block ads at the HTTP layer, not just DNS.",
+  "description": "A self-hosted HTTPS proxy with Adblock Plus and uBlock Origin filter support, scriptlet injection, cosmetic filtering, per-user passkeys, and transparent proxy mode. Block ads at the HTTP layer, not just DNS.",
   "url": "https://andrioid.github.io/ublproxy/",
   "applicationCategory": "NetworkApplication",
   "operatingSystem": "Linux, macOS, Windows",
@@ -1013,8 +1013,9 @@ td:first-child {
       <h1 class="fade-in fade-in-d1">Your browser should<br>work for <em>you</em></h1>
       <p class="hero-sub fade-in fade-in-d2">
         A network-wide HTTPS proxy that blocks ads at the HTTP layer.
-        Full Adblock Plus filter support, cosmetic filtering, and per-user
-        passkey authentication. Goes where DNS blockers can't.
+        Adblock Plus and uBlock Origin filter syntax, scriptlet injection,
+        cosmetic filtering, and per-user passkey authentication.
+        Goes where DNS blockers can't.
       </p>
       <div class="hero-actions fade-in fade-in-d3">
         <a href="https://github.com/andrioid/ublproxy/blob/main/QUICK_START.md" class="btn btn-primary">
@@ -1081,8 +1082,8 @@ td:first-child {
     <div class="features-grid">
       <div class="feature-card">
         <div class="feature-icon">&#x1f4cb;</div>
-        <h3>Adblock Plus filter lists</h3>
-        <p>Subscribe to EasyList, EasyPrivacy, and other community-maintained blocklists. Same syntax as browser extensions, applied at the network level.</p>
+        <h3>Adblock filter lists</h3>
+        <p>Subscribe to EasyList, EasyPrivacy, uBlock Filters, and other community blocklists. Supports Adblock Plus syntax and uBlock Origin extensions — <code style="font-family:var(--font-mono);font-size:0.82em;color:var(--yellow)">$redirect</code>, <code style="font-family:var(--font-mono);font-size:0.82em;color:var(--yellow)">$removeparam</code>, <code style="font-family:var(--font-mono);font-size:0.82em;color:var(--yellow)">$csp</code>, regex patterns, and more.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon">&#x2702;&#xfe0f;</div>
@@ -1091,8 +1092,8 @@ td:first-child {
       </div>
       <div class="feature-card">
         <div class="feature-icon">&#x1f3a8;</div>
-        <h3>Cosmetic filtering</h3>
-        <p>CSS is injected into HTML responses to hide ad containers, banners, and unwanted elements. No empty placeholders or broken layouts.</p>
+        <h3>Cosmetic filtering &amp; scriptlets</h3>
+        <p>CSS element hiding, scriptlet injection (<code style="font-family:var(--font-mono);font-size:0.82em;color:var(--yellow)">##+js()</code>), and blocked resource stripping. 11 scriptlets neutralize anti-adblock scripts and tracking.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon">&#x1f5b1;&#xfe0f;</div>
@@ -1193,7 +1194,7 @@ td:first-child {
           <div class="arch-features">
             <span class="arch-tag" style="color:var(--green);border-color:rgba(0,255,65,0.2)">Blocklist engine</span>
             <span class="arch-tag" style="color:var(--magenta);border-color:rgba(255,45,123,0.2)">TLS MITM</span>
-            <span class="arch-tag" style="color:var(--cyan);border-color:rgba(0,229,255,0.2)">CSS injection</span>
+            <span class="arch-tag" style="color:var(--cyan);border-color:rgba(0,229,255,0.2)">CSS + scriptlets</span>
             <span class="arch-tag" style="color:var(--yellow);border-color:rgba(255,230,0,0.2)">SQLite</span>
           </div>
         </div>
@@ -1211,7 +1212,7 @@ td:first-child {
 
     <div class="arch-caption">
       <p>Desktops and laptops connect over HTTPS on port 8443 via PAC file or manual proxy settings. Mobile devices connect over HTTP on port 8080. The proxy generates per-host TLS certificates on the fly using its own CA.</p>
-      <p>Blocked resource elements (<code style="background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:2px;font-family:var(--font-mono);font-size:0.85em;border:1px solid var(--border);color:var(--magenta)">&lt;script&gt;</code>, <code style="background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:2px;font-family:var(--font-mono);font-size:0.85em;border:1px solid var(--border);color:var(--magenta)">&lt;iframe&gt;</code>) are stripped from HTML. CSS element-hiding rules are pre-filtered from ~64K global selectors down to &lt;200 per page, then injected.</p>
+      <p>Blocked resource elements (<code style="background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:2px;font-family:var(--font-mono);font-size:0.85em;border:1px solid var(--border);color:var(--magenta)">&lt;script&gt;</code>, <code style="background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:2px;font-family:var(--font-mono);font-size:0.85em;border:1px solid var(--border);color:var(--magenta)">&lt;iframe&gt;</code>) are stripped from HTML. CSS element-hiding rules are pre-filtered from ~64K global selectors down to &lt;200 per page. Scriptlets are injected to neutralize anti-adblock scripts. Blocked requests can be replaced with neutered placeholders via <code style="background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:2px;font-family:var(--font-mono);font-size:0.85em;border:1px solid var(--border);color:var(--magenta)">$redirect</code>.</p>
     </div>
   </div>
 </section>
@@ -1246,8 +1247,8 @@ td:first-child {
             <td><span class="cross">No</span> &mdash; leaves placeholders</td>
           </tr>
           <tr>
-            <td>Adblock Plus filter lists</td>
-            <td><span class="check">Full syntax</span></td>
+            <td>Adblock filter syntax</td>
+            <td><span class="check">ABP + uBO extensions</span></td>
             <td><span class="partial">Domain lists only</span></td>
           </tr>
           <tr>

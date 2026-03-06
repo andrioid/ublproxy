@@ -1,6 +1,6 @@
 # Adblock Filter Syntax Support
 
-Reference: [uBlock Origin Static Filter Syntax](https://github.com/gorhill/uBlock/wiki/Static-filter-syntax)
+References: [Adblock Plus filter cheatsheet](https://adblockplus.org/filter-cheatsheet), [uBlock Origin Static Filter Syntax](https://github.com/gorhill/uBlock/wiki/Static-filter-syntax)
 
 Implementation: `internal/blocklist/`
 

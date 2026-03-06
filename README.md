@@ -108,9 +108,9 @@ sequenceDiagram
 
 ## Features
 
-### Adblock Plus lists
+### Adblock filter lists
 
-Subscribe to community-maintained blocklists like EasyList and EasyPrivacy. Lists are fetched and parsed automatically, and rules are applied to all proxied traffic.
+Subscribe to community-maintained blocklists like EasyList, EasyPrivacy, and uBlock Filters. Lists are fetched and parsed automatically. Supports the [Adblock Plus filter syntax](https://adblockplus.org/filter-cheatsheet) and many [uBlock Origin extensions](https://github.com/gorhill/uBlock/wiki/Static-filter-syntax) — see [ADBLOCK_SYNTAX.md](ADBLOCK_SYNTAX.md) for the full matrix.
 
 ### Custom rules
 
@@ -122,11 +122,15 @@ Desktop browsers connect to the proxy over HTTPS. The proxy generates per-host T
 
 ### Strips away scripts, images and embeds
 
-Blocked requests for scripts, images, iframes and other embedded resources are stopped at the proxy before they reach your browser.
+Blocked requests for scripts, images, iframes and other embedded resources are stopped at the proxy before they reach your browser. Blocked resources can be replaced with neutered placeholders (`$redirect`) to satisfy anti-adblock detection.
 
 ### Hides the rest
 
-CSS is injected into HTML responses to hide elements matching element-hiding rules. The proxy decompresses HTML, injects the CSS, and serves it back — removing ad containers, banners and other unwanted elements visually.
+CSS is injected into HTML responses to hide elements matching element-hiding rules. The proxy decompresses HTML (gzip, brotli, zstd), injects the CSS, and serves it back — removing ad containers, banners and other unwanted elements visually.
+
+### Scriptlet injection
+
+11 commonly-used scriptlets (`##+js()`) are injected as `<script>` tags to neutralize anti-adblock scripts, prevent tracking, and modify page behavior. Includes `set-constant`, `abort-on-property-read`, `addEventListener-defuser`, `nowebrtc`, `prevent-fetch`, and more.
 
 ### Users and custom rules
 
@@ -135,6 +139,23 @@ WebAuthn passkey authentication gives each user their own set of rules and subsc
 ### Transparent proxy mode
 
 Deploy on a VLAN with firewall rules to intercept all traffic automatically — no client-side proxy configuration needed. A captive portal guides new devices through CA certificate installation. Enable with `--transparent`.
+
+## Filter syntax support
+
+ublproxy implements the [Adblock Plus filter syntax](https://adblockplus.org/filter-cheatsheet) and the most-used [uBlock Origin extensions](https://github.com/gorhill/uBlock/wiki/Static-filter-syntax). Tested against EasyList (87K lines), uBlock Filters (11K lines, 2,500+ scriptlets), and EasyPrivacy with zero crashes and minimal parse errors.
+
+| Category | What's supported |
+|----------|-----------------|
+| **Network patterns** | Literal, wildcard `*`, separator `^`, anchors `\|`/`\|\|`, regex `/pattern/`, HOSTS format |
+| **Filter options** | `$script`, `$image`, `$css`, `$xhr`, `$frame`, `$media`, `$font`, `$doc`, `$ping`, `$all`, `$third-party`/`$3p`, `$domain=`, `$to=`, `$denyallow=`, `$method=`, `$match-case` |
+| **Priority** | `$important`, `$badfilter`, exception filters `@@` |
+| **Modifiers** | `$redirect` (19 neutered resources), `$removeparam`, `$csp`, `$permissions`, `$header` |
+| **Cosmetic** | Element hiding `##`, exceptions `#@#`, `$elemhide`, `$generichide`, `$specifichide` |
+| **Scriptlets** | `##+js()` with 11 scriptlets, `#@#+js()` exceptions |
+| **Directives** | `!#if`/`!#else`/`!#endif` with boolean expressions |
+| **Entity matching** | `google.*` in `$domain=`, `$to=`, `$denyallow=`, cosmetic filters |
+
+See [ADBLOCK_SYNTAX.md](ADBLOCK_SYNTAX.md) for the complete support matrix.
 
 ## Security
 
@@ -156,7 +177,7 @@ Solutions like [Pi-hole](https://pi-hole.net/) and [AdGuard Home](https://github
 
 - **URL-path blocking**: DNS blockers can only block entire hostnames. ublproxy can block specific paths (e.g. `/ads/banner.js`) while allowing legitimate content from the same domain.
 - **Cosmetic filtering**: HTML responses are modified before reaching the browser — blocked resource elements are stripped and CSS is injected to hide ad containers. DNS blockers leave empty ad placeholders.
-- **Full Adblock Plus filter list compatibility**: Supports the same filter syntax used by browser extensions (element hiding, URL patterns, content-type options), not just domain lists.
+- **Comprehensive filter syntax**: Supports Adblock Plus syntax and uBlock Origin extensions — network patterns, content-type options, `$redirect`, `$removeparam`, `$csp`, scriptlet injection (`##+js()`), element hiding, and pre-parsing directives. Not just domain lists.
 - **Resilient to anti-adblock**: Works against scripts that detect DNS-level blocking or missing ad resources, since responses are modified at the content level.
 - **Per-user rules**: Each user authenticates with a passkey and maintains their own rules and subscriptions, layered on top of server-wide blocklists.
 
@@ -176,5 +197,5 @@ These approaches aren't mutually exclusive. A DNS blocker can handle the bulk of
 ## References
 
 - See [QUICK_START.md](QUICK_START.md) for setup instructions (local and Docker).
+- See [ADBLOCK_SYNTAX.md](ADBLOCK_SYNTAX.md) for the full filter syntax support matrix.
 - See [CONTRIBUTING.md](CONTRIBUTING.md) for development.
-- See [adblock rules cheatsheet](https://adblockplus.org/filter-cheatsheet) for adblock plus filter syntax details.
