@@ -1110,6 +1110,11 @@ td:first-child {
         <h3>Transparent proxy mode</h3>
         <p>Deploy on a VLAN with firewall rules to intercept all traffic automatically. A captive portal guides new devices through CA certificate setup.</p>
       </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#x1f4e1;</div>
+        <h3>DNS resolver</h3>
+        <p>Devices that can't install a CA cert &mdash; smart TVs, game consoles, IoT &mdash; get host-level ad blocking via a built-in DNS resolver that null-routes blocked domains. Same blocklists, same per-user rules.</p>
+      </div>
     </div>
   </div>
 </section>
@@ -1183,6 +1188,10 @@ td:first-child {
           <div class="arch-node-label">Phone</div>
           <div class="arch-node-sub">:8080 HTTP</div>
         </div>
+        <div class="arch-node">
+          <div class="arch-node-label">Smart TV / IoT</div>
+          <div class="arch-node-sub">:53 DNS</div>
+        </div>
       </div>
 
       <div class="arch-arrow">&rarr;</div>
@@ -1196,6 +1205,7 @@ td:first-child {
             <span class="arch-tag" style="color:var(--magenta);border-color:rgba(255,45,123,0.2)">TLS MITM</span>
             <span class="arch-tag" style="color:var(--cyan);border-color:rgba(0,229,255,0.2)">CSS + scriptlets</span>
             <span class="arch-tag" style="color:var(--yellow);border-color:rgba(255,230,0,0.2)">SQLite</span>
+            <span class="arch-tag" style="color:var(--green);border-color:rgba(0,255,65,0.2)">DNS resolver</span>
           </div>
         </div>
       </div>
@@ -1211,7 +1221,7 @@ td:first-child {
     </div>
 
     <div class="arch-caption">
-      <p>Desktops and laptops connect over HTTPS on port 8443 via PAC file or manual proxy settings. Mobile devices connect over HTTP on port 8080. The proxy generates per-host TLS certificates on the fly using its own CA.</p>
+      <p>Desktops and laptops connect over HTTPS on port 8443 via PAC file or manual proxy settings. Mobile devices connect over HTTP on port 8080. Devices that can't install a CA cert (smart TVs, game consoles, IoT) use the built-in DNS resolver on port 53 for host-level blocking. The proxy generates per-host TLS certificates on the fly using its own CA.</p>
       <p>Blocked resource elements (<code style="background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:2px;font-family:var(--font-mono);font-size:0.85em;border:1px solid var(--border);color:var(--magenta)">&lt;script&gt;</code>, <code style="background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:2px;font-family:var(--font-mono);font-size:0.85em;border:1px solid var(--border);color:var(--magenta)">&lt;iframe&gt;</code>) are stripped from HTML. CSS element-hiding rules are pre-filtered from ~64K global selectors down to &lt;200 per page. Scriptlets are injected to neutralize anti-adblock scripts. Blocked requests can be replaced with neutered placeholders via <code style="background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:2px;font-family:var(--font-mono);font-size:0.85em;border:1px solid var(--border);color:var(--magenta)">$redirect</code>.</p>
     </div>
   </div>
@@ -1267,6 +1277,11 @@ td:first-child {
             <td><span class="check">Change DNS server</span></td>
           </tr>
           <tr>
+            <td>Devices without CA support</td>
+            <td><span class="check">Built-in DNS resolver</span></td>
+            <td><span class="check">Native</span></td>
+          </tr>
+          <tr>
             <td>Non-HTTP protocols</td>
             <td><span class="cross">HTTP/HTTPS only</span></td>
             <td><span class="check">All protocols</span></td>
@@ -1280,7 +1295,7 @@ td:first-child {
       </table>
     </div>
 
-    <p class="compare-note">These approaches aren't mutually exclusive. A DNS blocker handles the bulk of known ad domains cheaply, while ublproxy handles the cases DNS blocking can't reach.</p>
+    <p class="compare-note">These approaches aren't mutually exclusive. A DNS blocker handles the bulk of known ad domains cheaply, while ublproxy handles the cases DNS blocking can't reach. ublproxy's built-in DNS resolver (<code style="background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:2px;font-family:var(--font-mono);font-size:0.85em;border:1px solid var(--border);color:var(--yellow)">--dns-port</code>) covers devices that can't install a CA cert.</p>
   </div>
 </section>
 
@@ -1328,6 +1343,8 @@ td:first-child {
         <p>Pull the multi-arch image and run:</p>
         <div class="code-block">
           <span class="prompt">$</span> docker run <span class="flag">-p 8080:8080 -p 8443:8443</span> \<br>
+          &nbsp;&nbsp;<span class="flag">-p 53:53/udp -p 53:53/tcp</span> \<br>
+          &nbsp;&nbsp;<span class="flag">-e</span> UBLPROXY_DNS_PORT=53 \<br>
           &nbsp;&nbsp;<span class="flag">-v</span> ublproxy-data:/data \<br>
           &nbsp;&nbsp;ghcr.io/andrioid/ublproxy:edge
         </div>

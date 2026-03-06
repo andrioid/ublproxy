@@ -18,11 +18,13 @@ graph LR
         D1["Desktop"]
         D2["Laptop"]
         D3["Phone"]
+        D4["Smart TV /<br/>IoT"]
     end
 
     subgraph UBL["ublproxy"]
         HTTP[":8080<br/>HTTP"]
         HTTPS[":8443<br/>HTTPS"]
+        DNS[":53<br/>DNS"]
         BL["Blocklist<br/>Engine"]
         CA["CA + Cert<br/>Cache"]
         DB["SQLite<br/>Store"]
@@ -33,9 +35,11 @@ graph LR
     D1 --> HTTPS
     D2 --> HTTPS
     D3 --> HTTP
+    D4 --> DNS
 
     HTTPS --> BL
     HTTP --> BL
+    DNS --> BL
     BL --> CA
     BL --> UP
 
@@ -140,6 +144,10 @@ WebAuthn passkey authentication gives each user their own set of rules and subsc
 
 Deploy on a VLAN with firewall rules to intercept all traffic automatically — no client-side proxy configuration needed. A captive portal guides new devices through CA certificate installation. Enable with `--transparent`.
 
+### DNS resolver
+
+Built-in DNS resolver for devices that can't install a CA certificate — smart TVs, game consoles, IoT devices. Queries for blocked hostnames return `0.0.0.0` / `::`, everything else is forwarded to an upstream resolver. Uses the same blocklists and per-user rules as the proxy (matched by client IP). Enable with `--dns-port 53`.
+
 ## Filter syntax support
 
 ublproxy implements the [Adblock Plus filter syntax](https://adblockplus.org/filter-cheatsheet) and the most-used [uBlock Origin extensions](https://github.com/gorhill/uBlock/wiki/Static-filter-syntax). Tested against EasyList (87K lines), uBlock Filters (11K lines, 2,500+ scriptlets), and EasyPrivacy with zero crashes and minimal parse errors.
@@ -193,6 +201,8 @@ Solutions like [Pi-hole](https://pi-hole.net/) and [AdGuard Home](https://github
 ### Complementary use
 
 These approaches aren't mutually exclusive. A DNS blocker can handle the bulk of known ad domains cheaply, while ublproxy handles the cases DNS blocking can't reach — same-origin ads, cosmetic filtering, and URL-path-specific rules.
+
+ublproxy also includes a built-in DNS resolver (`--dns-port`) that null-routes blocked hostnames for devices that can't install a CA certificate. This provides host-level blocking without needing a separate DNS blocker, though it only covers the host-level rules from your blocklists — URL-path blocking, cosmetic filtering, and scriptlet injection still require the proxy.
 
 ## References
 

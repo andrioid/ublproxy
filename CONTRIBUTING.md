@@ -55,6 +55,8 @@ mise run dev
 | `--db` | `UBLPROXY_DB` | `~/.ublproxy/ublproxy.db` | Path to SQLite database |
 | `--blocklist` | `UBLPROXY_BLOCKLIST` | *(none)* | Path or URL to a blocklist file (repeatable, comma-separated in env var) |
 | `--transparent` | `UBLPROXY_TRANSPARENT` | `false` | Run in transparent proxy mode (intercept redirected traffic) |
+| `--dns-port` | `UBLPROXY_DNS_PORT` | `0` (disabled) | DNS resolver port for host-level blocking (disabled when 0) |
+| `--dns-upstream` | `UBLPROXY_DNS_UPSTREAM` | `1.1.1.1:53` | Upstream DNS resolver address |
 | `--log-level` | `UBLPROXY_LOG_LEVEL` | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. Use `debug` to log all proxied requests. |
 
 On first run, a CA certificate and key are generated in the `--ca-dir` directory. You need to trust the CA certificate (`ca.crt`) in your OS or browser for HTTPS interception to work without warnings. Restart your browser after trusting the certificate.

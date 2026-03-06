@@ -429,6 +429,50 @@ Passthrough (`@@||domain^`) works the same as in explicit mode. The proxy extrac
 - **HTTP-only captive portal**: The captive portal is triggered via HTTP connectivity checks. If a device only makes HTTPS requests, the captive portal won't trigger (the TLS handshake will fail with a certificate error instead).
 - **No WebAuthn in transparent mode**: The management portal is served over HTTPS on the proxy's hostname, but WebAuthn requires a stable origin. Configure `--hostname` with a domain name (not an IP) for WebAuthn to work.
 
+## DNS resolver
+
+For devices that can't install a CA certificate — smart TVs, game consoles, IoT devices — ublproxy can run a built-in DNS resolver that null-routes blocked hostnames.
+
+```bash
+./ublproxy --dns-port 53 \
+  --blocklist https://easylist.to/easylist/easylist.txt
+```
+
+When a DNS query arrives for a blocked hostname, the resolver responds with `0.0.0.0` (A) or `::` (AAAA). All other queries are forwarded to the upstream resolver (default: `1.1.1.1:53`, configurable with `--dns-upstream`).
+
+### What it covers
+
+The DNS resolver only applies **host-level rules** from your blocklists — entries like `||ads.example.com^` or `0.0.0.0 tracker.example.net`. URL-path blocking, cosmetic filtering, scriptlet injection, and `$removeparam` require the full HTTP proxy.
+
+### Per-user rules
+
+DNS queries are matched to users by client IP, using the same session mapping as the proxy. If a user has logged in via the portal from their IP, their per-user rules and exceptions apply to DNS queries from that IP too.
+
+### Port 53 and privileges
+
+Port 53 requires elevated privileges on most systems. Options:
+
+- **Linux**: `sudo setcap cap_net_bind_service=+ep ./ublproxy` (run as non-root with bind capability)
+- **macOS**: Run as root, or use a high port (`--dns-port 5353`) with `pf` redirect
+- **Docker**: Add `-p 53:53/udp -p 53:53/tcp` to your `docker run` command
+
+### Docker with DNS
+
+```bash
+docker run -d \
+  -p 8080:8080 \
+  -p 8443:8443 \
+  -p 53:53/udp \
+  -p 53:53/tcp \
+  -v ublproxy-data:/data \
+  -e UBLPROXY_DNS_PORT=53 \
+  ghcr.io/andrioid/ublproxy:edge
+```
+
+### Configuring devices
+
+Point your device's DNS settings to the IP address running ublproxy. On most devices this is in the network/Wi-Fi settings. You can also configure your router's DHCP to distribute ublproxy's IP as the DNS server for the entire network.
+
 ## CLI flags and environment variables
 
 All flags can also be set via environment variables. Environment variables take precedence over defaults but CLI flags take precedence over environment variables.
@@ -443,4 +487,6 @@ All flags can also be set via environment variables. Environment variables take 
 | `--db` | `UBLPROXY_DB` | `~/.ublproxy/ublproxy.db` | Path to SQLite database |
 | `--blocklist` | `UBLPROXY_BLOCKLIST` | *(none)* | Path or URL to a blocklist file (repeatable, comma-separated in env var) |
 | `--transparent` | `UBLPROXY_TRANSPARENT` | `false` | Run in transparent proxy mode (intercept redirected traffic) |
+| `--dns-port` | `UBLPROXY_DNS_PORT` | `0` (disabled) | DNS resolver port for host-level blocking |
+| `--dns-upstream` | `UBLPROXY_DNS_UPSTREAM` | `1.1.1.1:53` | Upstream DNS resolver address |
 | `--log-level` | `UBLPROXY_LOG_LEVEL` | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. Use `debug` to log all proxied requests. |

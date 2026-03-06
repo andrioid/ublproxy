@@ -12,6 +12,7 @@ const (
 	ActivityPassthrough     = "passthrough"
 	ActivityAutoPassthrough = "auto-passthrough"
 	ActivityElementHidden   = "element-hidden"
+	ActivityDNSBlocked      = "dns-blocked"
 )
 
 // ActivityEntry represents a single proxy event.

@@ -81,6 +81,18 @@ func main() {
 				Usage:   "run in transparent proxy mode (intercept redirected traffic instead of explicit proxy)",
 				Sources: cli.EnvVars("UBLPROXY_TRANSPARENT"),
 			},
+			&cli.IntFlag{
+				Name:    "dns-port",
+				Value:   0,
+				Usage:   "DNS resolver port for host-level blocking (disabled when 0)",
+				Sources: cli.EnvVars("UBLPROXY_DNS_PORT"),
+			},
+			&cli.StringFlag{
+				Name:    "dns-upstream",
+				Value:   "1.1.1.1:53",
+				Usage:   "upstream DNS resolver address",
+				Sources: cli.EnvVars("UBLPROXY_DNS_UPSTREAM"),
+			},
 			&cli.StringFlag{
 				Name:    "log-level",
 				Value:   "info",
@@ -108,6 +120,8 @@ func run(_ context.Context, cmd *cli.Command) error {
 	dbPath := cmd.String("db")
 	blocklistSources := cmd.StringSlice("blocklist")
 	transparent := cmd.Bool("transparent")
+	dnsPort := cmd.Int("dns-port")
+	dnsUpstream := cmd.String("dns-upstream")
 
 	caCert, caKey, err := ca.LoadOrGenerate(caDir)
 	if err != nil {
@@ -163,6 +177,16 @@ func run(_ context.Context, cmd *cli.Command) error {
 
 	httpsAddr := fmt.Sprintf("%s:%d", addr, httpsPort)
 	httpAddr := fmt.Sprintf("%s:%d", addr, httpPort)
+
+	if dnsPort > 0 {
+		dnsAddr := fmt.Sprintf("%s:%d", addr, dnsPort)
+		ds := &dnsServer{
+			proxy:    handler,
+			upstream: dnsUpstream,
+			activity: activityLog,
+		}
+		go startDNS(dnsAddr, ds)
+	}
 
 	if transparent {
 		return runTransparent(handler, certs, hostname, extraIPs, httpsAddr, httpAddr)
