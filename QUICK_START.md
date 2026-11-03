@@ -176,6 +176,15 @@ graph TB
 
 Visit `https://<host>:<https-port>/` and register a passkey. No username or password — the passkey is your identity. Anyone on the network can register.
 
+> **Windows (Chrome / Edge):** Windows Hello is not offered. ublproxy only supports ES256 passkeys, and Chromium only shows Windows Hello when the site also accepts RS256. Register with one of these instead:
+>
+> - **A phone** — pick "iPhone, iPad, or Android device" in the dialog and scan the QR code (passkey stored on the phone, needs Bluetooth on the PC)
+> - **A hardware security key** (YubiKey, etc.)
+> - **A password manager** that stores passkeys (e.g. 1Password, Bitwarden browser extension)
+> - **Firefox**, which handles platform authenticators differently
+>
+> You can also skip the portal entirely and configure blocking server-side with `--blocklist`.
+
 ### 2. Pick elements to block
 
 Browse any website through the proxy and press **Alt+Shift+B** to open the element picker.

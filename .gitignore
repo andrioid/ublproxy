@@ -4,3 +4,5 @@ mise.local.toml
 .playwright-cli/
 tmp/
 .DS_Store
+# Generated from web/arch-*.mmd at deploy time (mise run diagrams locally)
+web/arch-*.svg
