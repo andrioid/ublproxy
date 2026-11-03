@@ -26,10 +26,14 @@ jobs:
           node-version: "22"
       - run: npm install -g @mermaid-js/mermaid-cli
       - name: Regenerate SVGs
+        # ubuntu-latest restricts unprivileged user namespaces via AppArmor,
+        # so Chrome's sandbox can't start. Rendering our own .mmd files on a
+        # throwaway runner doesn't need it.
         run: |
+          echo '{"args":["--no-sandbox"]}' > "$RUNNER_TEMP/puppeteer.json"
           for src in web/arch-*.mmd; do
             out="${src%.mmd}.svg"
-            mmdc -i "$src" -o "$out" -c web/mermaid-config.json -b transparent
+            mmdc -i "$src" -o "$out" -c web/mermaid-config.json -p "$RUNNER_TEMP/puppeteer.json" -b transparent
           done
       - name: Check for uncommitted changes
         run: |
