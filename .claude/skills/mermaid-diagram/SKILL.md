@@ -6,7 +6,7 @@ allowed-tools: Bash(mise:*), Bash(mmdc:*), Read, Write, Edit, Glob
 
 # Mermaid Diagrams
 
-Architecture diagrams are authored as Mermaid `.mmd` files and pre-rendered to SVGs for the static website. The README uses inline mermaid code blocks (rendered natively by GitHub).
+Architecture diagrams are authored as Mermaid `.mmd` files and rendered to SVGs for the static website when it is deployed. The README uses inline mermaid code blocks (rendered natively by GitHub).
 
 ## Source files
 
@@ -17,7 +17,7 @@ Architecture diagrams are authored as Mermaid `.mmd` files and pre-rendered to S
 | `web/arch-dns.mmd` | DNS resolver mode diagram |
 | `web/mermaid-config.json` | Custom theme matching the website palette |
 
-The `.mmd` files are the **source of truth**. The `.svg` files are generated artifacts. The README contains the same mermaid syntax inline as fenced code blocks.
+The `.mmd` files are the **source of truth**. The `.svg` files are generated artifacts: they are gitignored and never committed. The Pages deploy (`.github/workflows/pages.yml`) renders them from the `.mmd` sources, and CI only checks that every `.mmd` renders. The README contains the same mermaid syntax inline as fenced code blocks.
 
 When updating a diagram, update **both** the `.mmd` file and the corresponding mermaid code block in `README.md`.
 
@@ -27,7 +27,7 @@ The mermaid CLI (`mmdc`) is installed via mise:
 
 ```toml
 # mise.toml
-"npm:@mermaid-js/mermaid-cli" = "latest"
+"npm:@mermaid-js/mermaid-cli" = "12.2.0" # keep in sync with .github/workflows/{ci,pages}.yml
 ```
 
 Ensure it's installed:
@@ -38,7 +38,7 @@ mise install
 
 ## Generating SVGs
 
-Generate a single diagram:
+SVGs are only needed locally to preview `web/index.html`; don't commit them. Regenerate all of them with `mise run diagrams`, or a single diagram:
 
 ```bash
 mise exec -- mmdc \
@@ -152,14 +152,14 @@ GitHub renders these natively. The syntax should match the `.mmd` files exactly.
 2. Generate a preview PNG: `mise exec -- mmdc -i web/arch-foo.mmd -o tmp/arch-foo.png -c web/mermaid-config.json -b transparent`
 3. Inspect the PNG with the Read tool
 4. Iterate until it looks right
-5. Generate the final SVG: `mise exec -- mmdc -i web/arch-foo.mmd -o web/arch-foo.svg -c web/mermaid-config.json -b transparent`
-6. Update the matching mermaid code block in `README.md`
-7. If adding a new diagram, add an `<img>` tag in `web/index.html`
+5. Update the matching mermaid code block in `README.md`
+6. If adding a new diagram, add an `<img>` tag in `web/index.html`
+7. Commit the `.mmd` change only. The SVG is built at deploy time
 
 ## Adding a new diagram
 
 1. Create `web/arch-newmode.mmd` with the mermaid source
-2. Generate SVG: `mise exec -- mmdc -i web/arch-newmode.mmd -o web/arch-newmode.svg -c web/mermaid-config.json -b transparent`
+2. Preview it locally with `mise run diagrams` (generates the gitignored SVG)
 3. Add to `web/index.html` inside the `.arch-modes` grid:
    ```html
    <div class="arch-mode-card">

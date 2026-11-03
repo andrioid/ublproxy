@@ -23,6 +23,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # Keep in sync with mise.toml and ci.yml
+      - run: npm install -g @mermaid-js/mermaid-cli@12.2.0
+      - name: Build diagram SVGs
+        # SVGs are generated artifacts (gitignored); render them from the
+        # .mmd sources. --no-sandbox: see the note in ci.yml.
+        run: |
+          echo '{"args":["--no-sandbox"]}' > "$RUNNER_TEMP/puppeteer.json"
+          for src in web/arch-*.mmd; do
+            out="${src%.mmd}.svg"
+            mmdc -i "$src" -o "$out" -c web/mermaid-config.json -p "$RUNNER_TEMP/puppeteer.json" -b transparent
+          done
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web

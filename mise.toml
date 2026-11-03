@@ -1,7 +1,7 @@
 [tools]
 go = "1.25"
 "npm:@playwright/cli" = "latest"
-"npm:@mermaid-js/mermaid-cli" = "latest"
+"npm:@mermaid-js/mermaid-cli" = "12.2.0" # keep in sync with .github/workflows/{ci,pages}.yml
 
 [task_config]
 includes = ["scripts"]
