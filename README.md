@@ -123,6 +123,7 @@ It's important to be aware, that by using this solution, you're essentially decr
 - **No re-compression**: After decompressing HTML (gzip/brotli/zstd) for CSS injection, HTML is served uncompressed to the client. This is fine when the proxy runs on localhost.
 - **Session-to-IP mapping**: Sessions are bound to client IP. Multiple users behind the same NAT IP share a single session slot (last login wins).
 - **Mobile proxy connection is unencrypted**: iOS and Android don't support HTTPS proxy connections. Mobile devices use a plain HTTP CONNECT proxy on port 8080. The CONNECT metadata (target hostname) is visible on the LAN, though the tunneled content is TLS-encrypted. The element picker is disabled on mobile connections to avoid leaking the session token.
+- **No Windows Hello in Chrome/Edge**: Only ES256 passkeys are supported. Chromium on Windows only offers Windows Hello when RS256 is accepted, so Windows users must register with a phone, security key, passkey-capable password manager, or Firefox. See [Quick Start](QUICK_START.md#1-register-an-account).
 
 ## Comparison with DNS-based blockers
 
